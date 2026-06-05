@@ -11,11 +11,11 @@
   --cyan-2: #48efc1;
   --magenta: #d94fff;
   --amber: #ffd166;
+  --radius: 12px;
+  --radius-sm: 8px;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
@@ -27,17 +27,8 @@ body {
   color: var(--text);
 }
 
-button,
-input,
-select {
-  font: inherit;
-}
-
-button,
-a,
-label {
-  touch-action: manipulation;
-}
+button, input, select { font: inherit; }
+button, a, label { touch-action: manipulation; }
 
 button {
   position: relative;
@@ -52,6 +43,7 @@ button {
   padding: 22px 0;
 }
 
+/* ─── Topbar ─── */
 .topbar {
   min-height: 96px;
   display: flex;
@@ -64,9 +56,7 @@ button {
   background: rgba(18, 17, 41, 0.96);
 }
 
-.copy {
-  min-width: 0;
-}
+.copy { min-width: 0; }
 
 .eyebrow {
   margin: 0 0 8px;
@@ -76,11 +66,7 @@ button {
   text-transform: uppercase;
 }
 
-h1,
-h2,
-p {
-  margin-top: 0;
-}
+h1, h2, p { margin-top: 0; }
 
 h1 {
   margin-bottom: 8px;
@@ -156,15 +142,9 @@ h1 {
   font-weight: 800;
   cursor: pointer;
 }
+.mic-card button:hover { border-color: var(--cyan); color: var(--cyan); }
 
-.mic-card button:hover {
-  border-color: var(--cyan);
-  color: var(--cyan);
-}
-
-.primary,
-.download,
-.file-button {
+.primary, .download, .file-button {
   color: #03151b;
   border-color: transparent;
   background: linear-gradient(90deg, var(--cyan-2), var(--cyan));
@@ -177,6 +157,7 @@ h1 {
   font-weight: 900;
 }
 
+/* ─── Layout ─── */
 .console-shell {
   display: grid;
   grid-template-columns: minmax(520px, 0.98fr) minmax(480px, 1fr);
@@ -184,24 +165,16 @@ h1 {
   margin-top: 20px;
 }
 
-.left-rack,
-.right-scope {
-  min-width: 0;
-}
+.left-rack, .right-scope { min-width: 0; }
 
-.mode-lab,
-.panel,
-.toggles,
-.presets,
-.right-scope #scope,
-.bottom-status,
-.live-actions,
-.output-tray {
+.mode-lab, .panel, .toggles, .presets,
+.right-scope #scope, .bottom-status, .live-actions, .output-tray, .scope-wrapper {
   border: 1px solid var(--line);
   border-radius: 16px;
   background: rgba(18, 17, 41, 0.93);
 }
 
+/* ─── Preset Grid ─── */
 .mode-lab {
   padding: 20px;
   position: relative;
@@ -220,23 +193,9 @@ h1 {
   mask-image: linear-gradient(120deg, black 0%, transparent 74%);
 }
 
-.mode-copy {
-  position: relative;
-  z-index: 1;
-  margin-bottom: 14px;
-}
-
-.mode-copy h2,
-.panel h2 {
-  margin-bottom: 8px;
-}
-
-.mode-copy p,
-.panel p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.55;
-}
+.mode-copy { position: relative; z-index: 1; margin-bottom: 14px; }
+.mode-copy h2, .panel h2 { margin-bottom: 8px; }
+.mode-copy p, .panel p { margin: 0; color: var(--muted); line-height: 1.55; }
 
 .mode-grid {
   position: relative;
@@ -254,6 +213,7 @@ h1 {
   background: rgba(27, 26, 63, 0.92);
   text-align: left;
   overflow: hidden;
+  transition: border-color 0.25s, background 0.25s, box-shadow 0.25s;
 }
 
 .mode-grid button:first-child {
@@ -266,9 +226,7 @@ h1 {
   background: rgba(42, 40, 82, 0.82);
 }
 
-.mode-grid .compact-preset:nth-last-child(1) {
-  grid-column: span 2;
-}
+.mode-grid .compact-preset:nth-last-child(1) { grid-column: span 2; }
 
 .mode-grid em {
   display: inline-flex;
@@ -284,30 +242,105 @@ h1 {
   font-weight: 900;
 }
 
-.mode-grid strong,
-.mode-grid span {
-  display: block;
-}
-
+.mode-grid strong, .mode-grid span { display: block; }
 .mode-grid strong {
   margin-bottom: 8px;
   color: var(--cyan);
   font-size: 1.04rem;
 }
+.mode-grid span { font-size: 0.86rem; line-height: 1.35; }
 
-.mode-grid span {
-  font-size: 0.86rem;
-  line-height: 1.35;
-}
-
-button.active-preset,
-.mode-grid button:hover,
-.panel-head button:hover,
-.presets button:hover {
+button.active-preset, .mode-grid button:hover, .panel-head button:hover, .presets button:hover {
   border-color: var(--cyan);
   background: rgba(8, 34, 48, 0.96);
+  box-shadow: 0 0 20px rgba(16, 222, 245, 0.1);
 }
 
+/* ─── Voice Modes (from electro-voice.html) ─── */
+.voice-modes {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(18, 17, 41, 0.93);
+}
+
+.voice-modes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.voice-modes-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.mode-badge {
+  padding: 3px 12px;
+  border-radius: 20px;
+  background: rgba(16, 222, 245, 0.12);
+  border: 1px solid rgba(16, 222, 245, 0.25);
+  color: var(--cyan);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mode-desc {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.voice-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+}
+
+.voice-mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 4px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: rgba(27, 26, 63, 0.7);
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.25s;
+  font-family: inherit;
+}
+
+.voice-mode-btn:hover {
+  border-color: var(--cyan);
+  color: var(--text);
+  background: rgba(16, 222, 245, 0.06);
+}
+
+.voice-mode-btn.active {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: rgba(16, 222, 245, 0.1);
+  box-shadow: 0 0 20px rgba(16, 222, 245, 0.12);
+}
+
+.vm-emoji {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.vm-label {
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ─── Tools ─── */
 .tools {
   display: grid;
   grid-template-columns: 1fr;
@@ -315,9 +348,7 @@ button.active-preset,
   margin-top: 14px;
 }
 
-.panel {
-  padding: 18px;
-}
+.panel { padding: 18px; }
 
 .upload-panel {
   display: grid;
@@ -335,36 +366,23 @@ button.active-preset,
   font-weight: 850;
   cursor: pointer;
 }
+.file-button input { position: absolute; opacity: 0; pointer-events: none; }
 
-.file-button input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.mini-actions,
-.download-actions,
-.presets {
+.mini-actions, .download-actions, .presets {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
 }
+.mini-actions { grid-column: 1 / -1; }
 
-.mini-actions {
-  grid-column: 1 / -1;
-}
-
-.mini-actions button,
-.live-actions button,
-.presets button,
-.panel-head button,
-.secondary-download {
+.mini-actions button, .live-actions button, .presets button, .panel-head button, .secondary-download {
   min-height: 40px;
   padding: 0 14px;
   border-radius: 7px;
   color: var(--text);
   background: rgba(255, 255, 255, 0.13);
   font-weight: 800;
+  transition: border-color 0.2s, background 0.2s;
 }
 
 .panel-head {
@@ -390,11 +408,9 @@ button.active-preset,
   text-align: right;
 }
 
-input[type="range"] {
-  width: 100%;
-  accent-color: var(--cyan);
-}
+input[type="range"] { width: 100%; accent-color: var(--cyan); }
 
+/* ─── Toggles ─── */
 .toggles {
   display: flex;
   flex-wrap: wrap;
@@ -404,38 +420,136 @@ input[type="range"] {
   padding: 16px;
 }
 
-.toggles input {
-  accent-color: #8e5fff;
-}
+.toggles input { accent-color: #8e5fff; }
 
 select {
   min-height: 40px;
-  margin-left: auto;
   padding: 0 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   color: var(--text);
   background: #0d1024;
+  cursor: pointer;
 }
 
-.presets {
-  margin-top: 14px;
-  padding: 14px;
+/* ─── User Presets ─── */
+.user-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
 }
 
+.user-presets button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255,255,255,0.06);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.user-presets button:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: rgba(16, 222, 245, 0.08);
+}
+
+.user-presets select {
+  min-height: 32px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* ─── Scope ─── */
 .right-scope {
   display: grid;
   grid-template-rows: minmax(540px, 1fr) auto auto auto;
   gap: 14px;
 }
 
-#scope {
+.scope-wrapper {
+  position: relative;
   width: 100%;
   min-height: 640px;
   height: 100%;
-  background: #111026;
+  padding: 0;
+  overflow: hidden;
+  background: #0d0c22;
 }
 
+#scope {
+  width: 100%;
+  height: 100% !important;
+  min-height: 640px;
+  display: block;
+  background: transparent;
+}
+
+/* ─── 音高叠加层 ─── */
+.scope-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 16px 20px;
+  pointer-events: none;
+}
+
+.pitch-readout {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.pitch-note {
+  font-size: 42px;
+  font-weight: 900;
+  color: var(--cyan);
+  text-shadow: 0 0 30px rgba(16, 222, 245, 0.3), 0 0 60px rgba(16, 222, 245, 0.1);
+  line-height: 1;
+  transition: opacity 0.15s;
+  font-variant-numeric: tabular-nums;
+}
+
+.pitch-freq {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.scope-tools {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.scope-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(13, 12, 34, 0.8);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.2s;
+  backdrop-filter: blur(8px);
+}
+.scope-btn:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: rgba(16, 222, 245, 0.1);
+}
+
+/* ─── Actions ─── */
 .live-actions {
   display: flex;
   flex-wrap: wrap;
@@ -449,12 +563,15 @@ select {
   padding: 14px;
   border-color: rgba(16, 222, 245, 0.58);
   background: rgba(8, 34, 48, 0.9);
+  animation: slideIn 0.3s ease;
 }
 
-.output-tray[hidden],
-.download[hidden] {
-  display: none;
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
+
+.output-tray[hidden], .download[hidden] { display: none; }
 
 #outputName {
   color: var(--cyan);
@@ -473,24 +590,28 @@ select {
   font-weight: 850;
 }
 
+/* ─── Status ─── */
 .bottom-status {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   color: var(--muted);
+  flex-wrap: wrap;
 }
 
 .dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: #7d7f69;
+  flex-shrink: 0;
 }
 
 .inline-status {
   margin: 0 auto 0 0;
   color: var(--muted);
+  font-size: 13px;
 }
 
 .level {
@@ -498,85 +619,71 @@ select {
   align-items: center;
   gap: 12px;
 }
+.level span { color: var(--cyan); font-weight: 700; font-size: 12px; }
 
-.level i {
-  width: 76px;
-  height: 5px;
-  border-radius: 999px;
-  background: #363370;
+/* ─── 快捷键提示 ─── */
+.shortcut-hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--muted);
+  opacity: 0.7;
 }
-
-.level strong {
-  color: var(--cyan);
+.shortcut-hint kbd {
+  display: inline-block;
+  padding: 1px 5px;
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  background: rgba(255,255,255,0.06);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .status {
   margin: 14px 0 0;
   color: var(--amber);
   line-height: 1.5;
+  font-size: 13px;
 }
 
+/* ─── Presets panel ─── */
+.presets {
+  margin-top: 14px;
+  padding: 14px;
+}
+
+/* ─── Responsive ─── */
 @media (max-width: 980px) {
-  .app {
-    width: min(100% - 24px, 1440px);
-  }
-
-  .topbar,
-  .console-shell {
-    grid-template-columns: 1fr;
-  }
-
-  .topbar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .top-actions {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .mic-card {
-    width: 100%;
-    max-width: none;
-  }
-
-  .mode-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  #scope {
-    min-height: 360px;
-  }
+  .app { width: min(100% - 24px, 1440px); }
+  .topbar, .console-shell { grid-template-columns: 1fr; }
+  .topbar { align-items: flex-start; flex-direction: column; }
+  .top-actions { width: 100%; justify-content: flex-start; }
+  .mic-card { width: 100%; max-width: none; }
+  .mode-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #scope, .scope-wrapper { min-height: 360px; }
+  .pitch-note { font-size: 32px; }
+  .shortcut-hint { display: none; }
+  .voice-mode-grid { grid-template-columns: repeat(5, 1fr); }
+  .vm-emoji { font-size: 18px; }
+  .vm-label { font-size: 9px; }
 }
 
 @media (max-width: 620px) {
-  .mode-grid,
-  .upload-panel {
-    grid-template-columns: 1fr;
-  }
-
-  .mini-actions,
-  .file-button {
-    grid-column: auto;
-  }
-
-  .panel label {
-    grid-template-columns: 1fr 64px;
-  }
-
-  .panel input {
-    grid-column: 1 / -1;
-  }
-
-  .live-actions button,
-  .mini-actions button,
-  .download-actions > * {
-    flex: 1 1 100%;
-  }
-
-  select {
-    width: 100%;
-    margin-left: 0;
-  }
+  .mode-grid, .upload-panel { grid-template-columns: 1fr; }
+  .mini-actions, .file-button { grid-column: auto; }
+  .panel label { grid-template-columns: 1fr 64px; }
+  .panel input { grid-column: 1 / -1; }
+  .live-actions button, .mini-actions button, .download-actions > * { flex: 1 1 100%; }
+  select { width: 100%; margin-left: 0; }
+  .user-presets { margin-left: 0; width: 100%; justify-content: flex-start; }
+  .toggles { gap: 8px; }
+  .pitch-note { font-size: 26px; }
+  .scope-overlay { padding: 10px 14px; }
+  .voice-mode-grid { grid-template-columns: repeat(3, 1fr); }
+  .voice-mode-btn:nth-child(4) { grid-column: 1 / 3; }
+  .voice-mode-btn:nth-child(5) { grid-column: 3 / 4; }
+  .vm-label { font-size: 9px; }
 }

@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>实时电音变声器</title>
-  <link rel="stylesheet" href="styles.css?v=20260603-mic2">
+  <title>⚡ 实时电音变声器 · Electro Voice</title>
+  <link rel="stylesheet" href="styles.css?v=20260605">
 </head>
 <body>
   <main class="app">
+    <!-- ═══ Header ═══ -->
     <header class="topbar">
       <div class="copy">
         <p class="eyebrow">Live Auto-Tune Voice</p>
@@ -25,12 +26,15 @@
       </div>
     </header>
 
+    <!-- ═══ Main ═══ -->
     <section class="console-shell">
+      <!-- Left: Controls -->
       <div class="left-rack">
+        <!-- 场景预设 -->
         <section class="mode-lab" aria-label="声音场景">
           <div class="mode-copy">
             <h2>声音场景</h2>
-            <p>主模式决定用途，风格预设决定质感。纯电/实验/器乐可以做大，流行人声和说唱 Hook 要收一点。</p>
+            <p>主模式决定用途，风格预设决定质感。</p>
           </div>
           <div class="mode-grid">
             <button type="button" data-preset="experimental">
@@ -71,6 +75,23 @@
           </div>
         </section>
 
+        <!-- 🎤 语音模式（5种电音模式，来自 electro-voice.html） -->
+        <section class="voice-modes" aria-label="语音模式">
+          <div class="voice-modes-header">
+            <h2>语音模式</h2>
+            <span id="modeLabel" class="mode-badge">经典电音</span>
+          </div>
+          <p id="modeInfo" class="mode-desc">将声音自动修正到最近音阶，产生标志性电音效果</p>
+          <div class="voice-mode-grid">
+            <button type="button" class="voice-mode-btn active" data-mode="autoTune"><span class="vm-emoji">🎤</span><span class="vm-label">经典电音</span></button>
+            <button type="button" class="voice-mode-btn" data-mode="robot"><span class="vm-emoji">🤖</span><span class="vm-label">机器人</span></button>
+            <button type="button" class="voice-mode-btn" data-mode="alien"><span class="vm-emoji">👽</span><span class="vm-label">外星人</span></button>
+            <button type="button" class="voice-mode-btn" data-mode="ethereal"><span class="vm-emoji">🌌</span><span class="vm-label">空灵</span></button>
+            <button type="button" class="voice-mode-btn" data-mode="hardcore"><span class="vm-emoji">💥</span><span class="vm-label">电子核</span></button>
+          </div>
+        </section>
+
+        <!-- 音频控制 -->
         <section class="tools">
           <article class="panel upload-panel">
             <div>
@@ -82,10 +103,11 @@
               选择音频
             </label>
             <button id="playFile" type="button" data-action="playFile">播放电音版</button>
-            <button id="exportFile" type="button" data-action="exportFile">导出声音文件</button>
+            <button id="exportFile" type="button" data-action="exportFile">导出 WAV</button>
             <button id="stopFile" type="button" data-action="stopFile">停止播放</button>
           </article>
 
+          <!-- 电音强度 -->
           <article class="panel effect-panel">
             <div class="panel-head">
               <h2>电音强度</h2>
@@ -93,6 +115,12 @@
             </div>
             <label>自动调音 <output id="pitchMixOut">96%</output>
               <input id="pitchMix" type="range" min="0" max="100" value="96">
+            </label>
+            <label>修音力度 <output id="autoTuneMixOut">100%</output>
+              <input id="autoTuneMix" type="range" min="0" max="100" value="100">
+            </label>
+            <label>声音温暖 <output id="warmOut">50%</output>
+              <input id="warm" type="range" min="0" max="100" value="50">
             </label>
             <label>机器人感 <output id="synthMixOut">94%</output>
               <input id="synthMix" type="range" min="0" max="100" value="94">
@@ -102,23 +130,37 @@
             </label>
           </article>
 
+          <!-- 电音细节（融合 electro-voice.html 的失真/比特压缩） -->
           <article class="panel detail-panel">
             <div class="panel-head">
-              <h2>细节</h2>
+              <h2>电音细节</h2>
               <button type="button" data-preset="clean">清爽</button>
             </div>
+            <label>音准力度 <output id="strengthOut">85%</output>
+              <input id="strength" type="range" min="0" max="100" value="85">
+            </label>
+            <label>共振峰 <output id="formantOut">50%</output>
+              <input id="formant" type="range" min="0" max="100" value="50">
+            </label>
+            <label>失真度 <output id="distortionOut">0%</output>
+              <input id="distortion" type="range" min="0" max="100" value="0">
+            </label>
+            <label>比特压缩 <output id="bitcrushOut">0%</output>
+              <input id="bitcrush" type="range" min="0" max="100" value="0">
+            </label>
             <label>载波 <output id="carrierOut">88 Hz</output>
               <input id="carrier" type="range" min="45" max="220" value="88">
             </label>
             <label>颗粒 <output id="crushOut">6%</output>
               <input id="crush" type="range" min="0" max="100" value="6">
             </label>
-            <label>空间 <output id="spaceOut">12%</output>
-              <input id="space" type="range" min="0" max="100" value="12">
+            <label>空间 <output id="spaceOut">16%</output>
+              <input id="space" type="range" min="0" max="100" value="16">
             </label>
           </article>
         </section>
 
+        <!-- 开关 + 用户预设 -->
         <section class="toggles" aria-label="效果开关">
           <label><input id="pitchOn" type="checkbox" checked> 自动调音</label>
           <label><input id="synthOn" type="checkbox" checked> 合成器层</label>
@@ -131,32 +173,59 @@
             <option value="pentatonic">五声音阶</option>
             <option value="chromatic">半音阶</option>
           </select>
+          <div class="user-presets">
+            <button id="presetSave" type="button" title="保存当前设置">💾 保存</button>
+            <button id="presetDelete" type="button" title="删除保存的预设">🗑 删除</button>
+            <select id="presetLoad" aria-label="加载用户预设" style="display:none">
+              <option value="">加载用户预设…</option>
+            </select>
+          </div>
         </section>
-
       </div>
 
+      <!-- Right: Scope + Actions -->
       <div class="right-scope">
-        <canvas id="scope" width="900" height="900" aria-label="实时声音波形"></canvas>
-
-        <div class="live-actions">
-          <button id="startLive" type="button" data-action="startLive">只开实时传声</button>
-          <button id="startRecord" type="button" data-action="startRecord">开始录制</button>
-          <button id="stopRecord" type="button" data-action="stopRecord">停止并导出</button>
-          <button id="stopLive" type="button" data-action="stopLive">停止传声</button>
-        </div>
-
-        <div id="outputTray" class="output-tray" hidden>
-          <span id="outputName">声音文件已生成</span>
-          <div class="download-actions">
-            <a id="downloadLink" class="download" href="#" download="electro-voice.wav">下载声音文件</a>
-            <button id="saveFile" class="download secondary-download" type="button" data-action="saveFile">另存为 WAV</button>
+        <!-- 作用域容器带音高叠加 -->
+        <div class="scope-wrapper">
+          <canvas id="scope" width="900" height="640" aria-label="实时声音波形 / 频谱"></canvas>
+          <div class="scope-overlay" id="scopeOverlay">
+            <div class="pitch-readout">
+              <span class="pitch-note" id="noteDisplay">--</span>
+              <span class="pitch-freq" id="freqDisplay">-- Hz</span>
+            </div>
+            <div class="scope-tools">
+              <button id="spectrumToggle" type="button" class="scope-btn" title="切换频谱/波形视图">〰 频谱</button>
+            </div>
           </div>
         </div>
 
+        <!-- 操作按钮 -->
+        <div class="live-actions">
+          <button id="startLive" type="button" data-action="startLive">🎤 实时传声</button>
+          <button id="startRecord" type="button" data-action="startRecord">⏺ 录制</button>
+          <button id="stopRecord" type="button" data-action="stopRecord">⏹ 停止并导出</button>
+          <button id="stopLive" type="button" data-action="stopLive">⏹ 停止传声</button>
+        </div>
+
+        <!-- 下载区 -->
+        <div id="outputTray" class="output-tray" hidden>
+          <span id="outputName">声音文件已生成</span>
+          <div class="download-actions">
+            <a id="downloadLink" class="download" href="#" download="electro-voice.wav">下载 WAV</a>
+            <button id="saveFile" class="download secondary-download" type="button" data-action="saveFile">另存为</button>
+          </div>
+        </div>
+
+        <!-- 状态栏 -->
         <footer class="bottom-status">
           <span class="dot"></span>
           <p class="inline-status" id="inlineStatus">准备好了，点击按钮后这里会显示反馈。</p>
-          <div class="level"><span>电平</span><i></i><strong>实时电音</strong></div>
+          <div class="level">
+            <span>实时电音</span>
+          </div>
+          <div class="shortcut-hint" title="快捷键">
+            <kbd>Space</kbd> 启停 <kbd>R</kbd> 录制 <kbd>1-5</kbd> 预设 <kbd>V</kbd> 视图
+          </div>
         </footer>
       </div>
     </section>
@@ -164,6 +233,6 @@
     <p class="status" id="status">准备好了。建议戴耳机，避免扬声器声音回到麦克风。</p>
   </main>
 
-  <script src="app.js?v=20260603-mic2"></script>
+  <script src="app.js?v=20260605"></script>
 </body>
 </html>
