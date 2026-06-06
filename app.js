@@ -84,25 +84,33 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
     this.rawPitch = [-1, -1, -1, -1, -1];
     this.pitchIdx = 0;
     this.smoothedFreq = -1;
-    this.phase = 0; this.phase2 = 0; this.phase3 = 0;
+    this.phase = 0; this.phase2 = 0;
 
     // 参数
     this.mode = 'autoTune';
-    this.mix = 1;          // 干湿混合（音频流）
-    this.strength = 0.85;  // 音准力度（autoTune/ethereal）
-    this.formant = 0.5;    // 共振峰偏移
-    this.distortion = 0;   // 失真度
-    this.bitcrush = 0;     // 比特压缩
-    this.warmth = 0.6;     // 温暖度
+    this.mix = 1;
+    this.strength = 0.85;
+    this.formant = 0.5;
+    this.distortion = 0;
+    this.bitcrush = 0;
+    this.warmth = 0.6;
     this.scale = 'chromatic';
     this.intervals = SCALE_MAP.chromatic;
-    this.rootNote = 60;    // C4
-    this.tuneMix = 1;      // 修音混合 (from autoTuneMix slider)
+    this.rootNote = 60;
+    this.tuneMix = 1;
 
-    this.env = 0;
-    this.prevDry = 0;
-    this.gateOpen = false;
-    this.gateAmp = 0;
+    // 平滑包络（消除爆音）
+    this.smoothAmp = 0;        // 平滑后的振幅
+    this.attack = 0.002;       // 起音时间（系数）
+    this.release = 0.0005;     // 释音时间
+
+    // DC blocker
+    this.dcIn1 = 0; this.dcIn2 = 0; this.dcOut1 = 0; this.dcOut2 = 0;
+    const R = 0.995;
+    this.dcR = R;
+
+    // 共振峰（一阶低通/高通）
+    this.fpPrev = 0;
 
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -153,17 +161,15 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
         detectedFreq = -1;
       }
 
-      // 音阶量化（仅在 autoTune 和 ethereal 模式下使用音阶量化）
+      // 音阶量化
       if (detectedFreq > 0) {
         if (this.mode === 'autoTune' || this.mode === 'ethereal') {
           const q = quantizePitch(detectedFreq, this.intervals, this.rootNote);
           if (q > 0) detectedFreq = detectedFreq + (q - detectedFreq) * this.strength;
         } else if (this.mode === 'robot' || this.mode === 'hardcore') {
-          // 硬锁定到 12 平均律
           const sn = snapToEqualTemperament(detectedFreq);
           if (sn > 0) detectedFreq = sn;
         }
-        // 外星人模式不改频率
       }
 
       // 平滑
@@ -171,8 +177,7 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
         if (this.smoothedFreq < 0) {
           this.smoothedFreq = detectedFreq;
         } else {
-          const alpha = 0.35;
-          this.smoothedFreq = this.smoothedFreq * (1 - alpha) + detectedFreq * alpha;
+          this.smoothedFreq += (detectedFreq - this.smoothedFreq) * 0.35;
         }
       } else {
         if (this.smoothedFreq > 0) { this.smoothedFreq *= 0.98; if (this.smoothedFreq < 50) this.smoothedFreq = -1; }
@@ -192,23 +197,28 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
     // ── 逐样本处理 ──
     for (let i = 0; i < len; i++) {
       const s = ch[i];
+
+      // 包络跟随（平滑 attack/release，避免硬开关爆音）
       const abs = Math.abs(s);
-      this.env = abs > this.env ? this.env * 0.4 + abs * 0.6 : this.env * 0.999 + abs * 0.001;
-      this.gateAmp = this.env;
-      this.gateOpen = this.gateAmp > 0.003;
+      const envTarget = abs;
+      if (envTarget > this.smoothAmp) {
+        this.smoothAmp += (envTarget - this.smoothAmp) * this.attack;
+      } else {
+        this.smoothAmp += (envTarget - this.smoothAmp) * this.release;
+      }
 
       let processed = 0;
       const sp = this.smoothedFreq;
-      const amp = Math.sqrt(Math.max(0.0005, this.gateAmp));
+      const amp = Math.sqrt(Math.max(0.0001, this.smoothAmp));
 
-      if (sp > 0 && this.gateOpen && this.mix > 0.01) {
-        // ── 根据模式确定目标频率 ──
+      // 只有在信号够强且有音高时才合成（但不要硬切，用振幅渐变）
+      const hasSignal = sp > 0 && this.smoothAmp > 0.002;
+
+      if (hasSignal) {
+        // ── 确定目标频率 ──
         let targetFreq = sp;
         switch (this.mode) {
-          case 'autoTune':
-            // 已经量化过了直接用平滑值
-            targetFreq = sp;
-            break;
+          case 'autoTune': targetFreq = sp; break;
           case 'robot':
             targetFreq = snapToEqualTemperament(sp);
             if (targetFreq < 0) targetFreq = sp;
@@ -216,94 +226,101 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
           case 'alien':
             targetFreq = sp * (0.5 + this.formant * 1.5);
             break;
-          case 'ethereal':
-            targetFreq = sp;
-            break;
+          case 'ethereal': targetFreq = sp; break;
           case 'hardcore':
             targetFreq = snapToEqualTemperament(sp);
             if (targetFreq < 0) targetFreq = sp;
             break;
-          default:
-            targetFreq = sp;
+          default: targetFreq = sp;
         }
         targetFreq = Math.max(50, Math.min(2000, targetFreq));
 
-        // ── 合成波形 ──
+        // ── 相位递进（永不重置，避免相位跳跃爆音） ──
         this.phase += 2 * Math.PI * targetFreq / this.sr;
         if (this.phase > 2 * Math.PI) this.phase -= 2 * Math.PI;
 
+        // ── 软波形合成（消除方波硬切导致的混叠） ──
         let sig;
+        const p = this.phase;
         switch (this.mode) {
           case 'autoTune':
           case 'ethereal':
-            sig = Math.sin(this.phase) * 0.65 +
-                  Math.sin(this.phase * 2) * 0.25 +
-                  Math.sin(this.phase * 3) * 0.1;
+            sig = Math.sin(p) * 0.65 +
+                  Math.sin(p * 2) * 0.25 +
+                  Math.sin(p * 3) * 0.1;
             break;
           case 'alien':
-            sig = Math.sin(this.phase) * 0.75 +
-                  Math.sin(this.phase * 3) * 0.25;
+            sig = Math.sin(p) * 0.75 +
+                  Math.sin(p * 3) * 0.25;
             break;
           case 'robot':
-            sig = (this.phase > Math.PI ? 1 : -1) * 0.45 +
-                  Math.sin(this.phase) * 0.3 +
-                  Math.sin(this.phase * 2) * 0.15 +
-                  Math.sin(this.phase * 3) * 0.1;
+            // 软方波：tanh(sin * gain)
+            sig = Math.tanh(Math.sin(p) * 3.0) * 0.5 +
+                  Math.sin(p) * 0.25 +
+                  Math.sin(p * 2) * 0.15 +
+                  Math.sin(p * 3) * 0.1;
             break;
           case 'hardcore':
-            sig = (this.phase > Math.PI ? 0.55 : -0.55) +
-                  Math.sin(this.phase) * 0.45;
+            // 软方波 + 更多失真
+            sig = Math.tanh(Math.sin(p) * 4.0) * 0.55 +
+                  Math.sin(p) * 0.35;
             break;
           default:
-            sig = Math.sin(this.phase);
+            sig = Math.sin(p);
         }
 
-        // ethereal: 添加微量失谐第二声部
+        // ethereal: 微量失谐第二声部
         if (this.mode === 'ethereal') {
           this.phase2 += 2 * Math.PI * targetFreq * 1.005 / this.sr;
           if (this.phase2 > 2 * Math.PI) this.phase2 -= 2 * Math.PI;
           sig = sig * 0.6 + Math.sin(this.phase2) * 0.4;
         }
 
-        // 应用温暖度 — 泛音混合
+        // 温暖度混合
         if (this.mode === 'autoTune' || this.mode === 'ethereal') {
-          const w = this.warmth;
-          // warmth: 0=纯基频, 1=更多泛音
-          sig = sig * (0.7 + w * 0.3);
+          sig *= (0.7 + this.warmth * 0.3);
         }
 
-        processed = sig * amp * 1.2;
+        // 用平滑振幅包络（消除爆音）
+        processed = sig * amp;
 
-        // 共振峰偏移（非 autoTune/ethereal 模式）
+        // 共振峰（一阶滤波器，避免 prevDry 混入未处理信号）
         if (this.mode !== 'autoTune' && this.mode !== 'ethereal') {
-          const tilt = (this.formant - 0.5) * 2;
-          const f = processed * (1 + tilt * 0.35) + this.prevDry * (-tilt * 0.2);
-          this.prevDry = processed;
-          processed = f;
+          const tilt = (this.formant - 0.5) * 2;  // -1 ~ 1
+          // 简单一阶 shelving
+          const a = 0.15;
+          this.fpPrev = this.fpPrev * (1 - a) + processed * a;
+          processed = processed + this.fpPrev * tilt * 0.3;
         }
-      } else if (!this.gateOpen) {
-        this.phase = 0; this.phase2 = 0; this.phase3 = 0;
       }
-      this.prevDry = s;
 
-      // ── 失真 ──
+      // ── 失真（用 soft clip 代替 tanh/tanh 除法，避免除零爆音） ──
+      let wet = processed;
       if (this.distortion > 0.01) {
-        const drive = 1 + this.distortion * 10;
-        let x = processed * drive;
-        x = Math.tanh(x) / Math.tanh(drive);
-        processed = processed * (1 - this.distortion * 0.5) + x * (this.distortion * 0.5);
+        const drive = 1 + this.distortion * 6;
+        // soft clip: atan 比 tanh 更温和
+        let x = wet * drive;
+        const clip = Math.atan(x) / Math.atan(drive);
+        wet = wet * (1 - this.distortion * 0.3) + clip * (this.distortion * 0.3);
       }
 
       // ── 比特压缩 ──
       if (this.bitcrush > 0.01) {
         const steps = Math.max(2, Math.round(256 * (1 - this.bitcrush)));
         const stepSize = 2 / steps;
-        processed = Math.round(processed / stepSize) * stepSize;
+        wet = Math.round(wet / stepSize) * stepSize;
       }
 
-      // ── 干湿混合 + 削波 ──
+      // ── 干湿混合 ──
       const outMix = this.mix;
-      const result = s * (1 - outMix) + processed * outMix;
+      let result = s * (1 - outMix) + wet * outMix;
+
+      // ── DC blocker ──
+      this.dcIn1 = this.dcIn2; this.dcIn2 = result;
+      result = this.dcIn2 - this.dcIn1 + this.dcR * this.dcOut1;
+      this.dcOut1 = result;
+
+      // ── 削波保护 ──
       och[i] = Math.max(-1, Math.min(1, result));
     }
     return true;
