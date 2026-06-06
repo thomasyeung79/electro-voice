@@ -461,13 +461,15 @@ async function detectMicrophones(options = {}) {
     if (requestPermission && state !== "granted") { setMicInfo("等待授权", "请在浏览器弹窗允许麦克风"); await requestTemporaryMicStream(); }
     const devs = await navigator.mediaDevices.enumerateDevices();
     const mics = devs.filter(d => d.kind === "audioinput");
-    if (!mics.length) { setMicInfo("未检测到麦克风", "检查设备连接"); return; }
+    if (!mics.length) { setMicInfo("⚠️ 未检测到麦克风", "检查设备连接或重新插拔"); return; }
     const named = mics.map(d => d.label).filter(Boolean);
     if (!named.length) {
-      if (state === "denied") { setMicInfo("权限已拒绝", "请修改浏览器权限后刷新"); setStatus("麦克风权限被拒绝，请在地址栏权限设置中允许麦克风。"); return; }
-      setMicInfo("已发现输入", mics.length + " 个输入设备"); return;
+      if (state === "denied") { setMicInfo("🚫 权限已拒绝", "请修改浏览器权限后刷新"); setStatus("麦克风权限被拒绝，请在地址栏权限设置中允许麦克风。"); return; }
+      // 有设备但没名字 = 需要先授权
+      setMicInfo("🔄 检测到 " + mics.length + " 个输入设备", "点击「实时传声」授权麦克风后显示名称");
+      return;
     }
-    setMicInfo("麦克风已就绪", named.slice(0, 2).join(" / ") + (named.length > 2 ? " 等 " + named.length + " 个" : ""));
+    setMicInfo("✅ 麦克风已就绪", named.slice(0, 2).join(" / ") + (named.length > 2 ? " 等 " + named.length + " 个" : ""));
   } catch (err) { setMicInfo("无法读取麦克风", err.name === "NotAllowedError" ? "权限被拒绝" : err.message); }
 }
 function showActiveInput(stream) {
@@ -757,6 +759,8 @@ async function startLive() {
     showActiveInput(liveStream);
     liveSource = audio.createMediaStreamSource(liveStream);
     liveSource.connect(chain.input);
+    // 授权后重新检测，显示设备名称
+    setTimeout(() => detectMicrophones(), 500);
     setStatus("实时传声已开启。说话或唱歌时会输出电音效果。");
     // 更新状态栏绿点
     const dot = document.querySelector('.bottom-status .dot');
@@ -1081,6 +1085,14 @@ updateEffectValues();
 updatePresetMenu();
 detectMicrophones();
 setupKeyboardShortcuts();
+// 页面加载后主动请求麦克风权限（触发浏览器弹窗），方便后续检测设备名
+setTimeout(() => {
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
+    .then(s => { s.getTracks().forEach(t => t.stop()); })
+    .catch(() => {})
+    .finally(() => detectMicrophones());
+}, 1000);
 if (navigator.mediaDevices?.addEventListener) {
   navigator.mediaDevices.addEventListener("devicechange", () => detectMicrophones());
 }
