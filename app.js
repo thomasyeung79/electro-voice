@@ -88,7 +88,8 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
 
     // 参数
     this.mode = 'autoTune';
-    this.mix = 1;
+    // 默认 mix 0.5，让合成声和原声各一半，听起来更自然
+    this.mix = 0.5;
     this.strength = 0.85;
     this.formant = 0.5;
     this.distortion = 0;
@@ -508,73 +509,77 @@ async function ensureAudio() {
 
 function createEffectChain(ctx) {
   const input = ctx.createGain();
-  const dry = ctx.createGain();
-  const tuned = ctx.createDelay(0.045);
-  const tuneFeedback = ctx.createGain();
-  const tuneWet = ctx.createGain();
-  const synthIn = ctx.createGain();
-  const synthWet = ctx.createGain();
+
+  // ── 主输出链（干净的直接路径） ──
+  const mainOutput = ctx.createGain();
+  // 反馈抑制：低切 + 限制器
+  const dcBlocker = ctx.createBiquadFilter();
+  dcBlocker.type = "highpass";
+  dcBlocker.frequency.value = 120;
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -12;
+  limiter.knee.value = 12;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.001;
+  limiter.release.value = 0.05;
+
+  // ── Send 效果（并行发送，不会改变主信号） ──
   const crusher = ctx.createWaveShaper();
+  const crusherFilter = ctx.createBiquadFilter();
   const crusherWet = ctx.createGain();
-  const filter = ctx.createBiquadFilter();
   const delay = ctx.createDelay(0.7);
   const delayFeedback = ctx.createGain();
   const delayWet = ctx.createGain();
   const convolver = ctx.createConvolver();
   const reverbWet = ctx.createGain();
-  const output = ctx.createGain();
+  const sendBus = ctx.createGain();   // 发送总线
+
+  // ── 分析 + 录制 ──
   const analyser = ctx.createAnalyser();
   const capture = ctx.createScriptProcessor(4096, 2, 2);
   const captureMute = ctx.createGain();
-  // 反馈抑制：限制器 + 低频切除
-  const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -6;
-  limiter.knee.value = 6;
-  limiter.ratio.value = 12;
-  limiter.attack.value = 0.003;
-  limiter.release.value = 0.1;
 
-  lfo = ctx.createOscillator();
-  const lfoGain = ctx.createGain();
-  lfo.type = "square"; lfo.frequency.value = 7.5; lfoGain.gain.value = 0.012;
-  lfo.connect(lfoGain); lfoGain.connect(tuned.delayTime); lfo.start();
+  // 信号流：
+  // input → autoTuneNode → mainOutput → dcBlocker → limiter → analyser / capture → destination
+  //                      ↕→ sendBus → crusher / delay / reverb → mix back
 
-  const carrier = ctx.createOscillator();
-  const carrierGain = ctx.createGain();
-  const ring = ctx.createGain();
-  const maskHigh = ctx.createBiquadFilter();
-  const maskBand = ctx.createBiquadFilter();
-  const maskPeak = ctx.createBiquadFilter();
-  carrier.type = "sawtooth"; carrier.frequency.value = 96; carrierGain.gain.value = 0;
-  carrier.connect(carrierGain); carrierGain.connect(ring.gain); carrier.start();
-
-  // 信号流: input → autoTuneNode → 效果链 → output
   input.connect(autoTuneNode);
-  autoTuneNode.connect(dry);
-  autoTuneNode.connect(tuned); tuned.connect(tuneFeedback); tuneFeedback.connect(tuned); tuned.connect(tuneWet);
-  autoTuneNode.connect(synthIn); synthIn.connect(ring); ring.connect(maskHigh); maskHigh.connect(maskBand); maskBand.connect(maskPeak); maskPeak.connect(synthWet);
-  autoTuneNode.connect(crusher); crusher.connect(filter); filter.connect(crusherWet);
-  autoTuneNode.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet);
-  autoTuneNode.connect(convolver); convolver.connect(reverbWet);
-  dry.connect(output); tuneWet.connect(output); synthWet.connect(output); crusherWet.connect(output); delayWet.connect(output); reverbWet.connect(output);
-  output.connect(limiter); limiter.connect(analyser); limiter.connect(capture); capture.connect(captureMute); captureMute.connect(ctx.destination); analyser.connect(ctx.destination);
+  autoTuneNode.connect(mainOutput);
+  mainOutput.connect(dcBlocker);
+  dcBlocker.connect(limiter);
+  limiter.connect(analyser);
+  analyser.connect(ctx.destination);
+  limiter.connect(capture);
+  capture.connect(captureMute);
+  captureMute.connect(ctx.destination);
+
+  // Send 效果 — 也送进 analyser 做可视化
+  autoTuneNode.connect(sendBus);
+  sendBus.connect(crusher); crusher.connect(crusherFilter); crusherFilter.connect(crusherWet); crusherWet.connect(analyser);
+  sendBus.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet); delayWet.connect(analyser);
+  sendBus.connect(convolver); convolver.connect(reverbWet); reverbWet.connect(analyser);
 
   analyser.fftSize = 2048;
-  filter.type = "lowpass";
-  maskHigh.type = "highpass"; maskHigh.frequency.value = 180;
-  maskBand.type = "bandpass"; maskBand.frequency.value = 1150; maskBand.Q.value = 1.8;
-  maskPeak.type = "peaking"; maskPeak.frequency.value = 2600; maskPeak.Q.value = 1.1; maskPeak.gain.value = 8;
-  convolver.buffer = makeImpulse(ctx, 1.8);
-  crusher.curve = makeCrusherCurve(0.28);
-  output.gain.value = 0.65;
+  crusherFilter.type = "lowpass";
+  crusherFilter.frequency.value = 7200;
+  convolver.buffer = makeImpulse(ctx, 1.5);
+  crusher.curve = makeCrusherCurve(0.15);
+  mainOutput.gain.value = 0.45;
   captureMute.gain.value = 0;
+  sendBus.gain.value = 0.3;  // send 总量
+
   capture.onaudioprocess = (event) => {
     if (!wavRecording) return;
     const l = event.inputBuffer.getChannelData(0);
     const r = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : l;
     wavLeft.push(new Float32Array(l)); wavRight.push(new Float32Array(r)); wavLength += l.length;
   };
-  return { input, dry, tuned, tuneFeedback, tuneWet, carrier, carrierGain, maskHigh, maskBand, maskPeak, synthWet, crusher, crusherWet, filter, delay, delayFeedback, delayWet, convolver, reverbWet, output, analyser, capture };
+
+  return {
+    input, crusher, crusherWet, crusherFilter,
+    delay, delayFeedback, delayWet, convolver, reverbWet, sendBus,
+    mainOutput, analyser, capture, limiter
+  };
 }
 
 function updatePitchDisplay(d) {
@@ -666,31 +671,37 @@ function updateEffectValues() {
   if (!chain || !audio) return;
   const now = audio.currentTime;
 
-  const maskMode = synth > 0.85 && pitch > 0.88;
-  const dryLevel = maskMode ? 0 : Math.max(0.02, 0.42 - pitch * 0.28 - synth * 0.36);
-  const tuneLevel = els.pitchOn.checked ? (maskMode ? 0.04 : 0.32 + pitch * 0.42) : 0;
-  const synthLevel = els.synthOn.checked ? (maskMode ? 1.45 : synth * 0.98) : 0;
-  const crushLevel = els.crushOn.checked ? crush * (maskMode ? 0.08 : 0.16) : 0;
+  // 主音量（直接控制，不用乘以 1.05）
+  chain.mainOutput.gain.setTargetAtTime(monitor * 0.7, now, 0.02);
 
-  chain.dry.gain.setTargetAtTime(dryLevel, now, 0.02);
-  chain.output.gain.setTargetAtTime(monitor * 1.05, now, 0.02);
-  chain.tuned.delayTime.setTargetAtTime(els.pitchOn.checked ? quantizedDelayTime() * (low ? 0.45 : 1) : 0.001, now, 0.02);
-  chain.tuneFeedback.gain.setTargetAtTime(els.pitchOn.checked ? (0.11 + pitch * 0.18) * (low ? 0.55 : 1) : 0, now, 0.02);
-  chain.tuneWet.gain.setTargetAtTime(tuneLevel, now, 0.02);
-  chain.carrier.frequency.setTargetAtTime(Number(els.carrier.value), now, 0.02);
-  chain.carrierGain.gain.setTargetAtTime(els.synthOn.checked ? 0.65 + synth * 0.65 : 0, now, 0.02);
-  chain.maskBand.frequency.setTargetAtTime(maskMode ? 1120 : 1500, now, 0.02);
-  chain.maskBand.Q.setTargetAtTime(maskMode ? 2.2 : 1.2, now, 0.02);
-  chain.maskPeak.gain.setTargetAtTime(maskMode ? 10 : 4, now, 0.02);
-  chain.synthWet.gain.setTargetAtTime(synthLevel, now, 0.02);
-  chain.crusher.curve = makeCrusherCurve(crush);
-  chain.crusherWet.gain.setTargetAtTime(crushLevel, now, 0.02);
-  chain.filter.frequency.setTargetAtTime(7200, now, 0.02);
-  chain.filter.Q.setTargetAtTime(0.65 + crush * 5, now, 0.02);
-  chain.delay.delayTime.setTargetAtTime(0.12 + space * 0.38, now, 0.02);
-  chain.delayFeedback.gain.setTargetAtTime(els.spaceOn.checked ? space * 0.48 * (low ? 0.45 : 1) : 0, now, 0.02);
-  chain.delayWet.gain.setTargetAtTime(els.spaceOn.checked ? space * 0.36 * (low ? 0.4 : 1) : 0, now, 0.02);
-  chain.reverbWet.gain.setTargetAtTime(els.spaceOn.checked ? space * 0.42 * (low ? 0.55 : 1) : 0, now, 0.02);
+  // Crusher（颗粒质感）
+  if (els.crushOn.checked) {
+    chain.crusher.curve = makeCrusherCurve(crush);
+    chain.crusherWet.gain.setTargetAtTime(crush * 0.2, now, 0.02);
+    chain.crusherFilter.frequency.setTargetAtTime(7200 - crush * 3000, now, 0.02);
+  } else {
+    chain.crusherWet.gain.setTargetAtTime(0, now, 0.02);
+  }
+
+  // Delay（延迟）
+  if (els.spaceOn.checked) {
+    chain.delay.delayTime.setTargetAtTime(0.12 + space * 0.38, now, 0.02);
+    chain.delayFeedback.gain.setTargetAtTime(space * 0.4 * (low ? 0.5 : 1), now, 0.02);
+    chain.delayWet.gain.setTargetAtTime(space * 0.3 * (low ? 0.5 : 1), now, 0.02);
+  } else {
+    chain.delayFeedback.gain.setTargetAtTime(0, now, 0.02);
+    chain.delayWet.gain.setTargetAtTime(0, now, 0.02);
+  }
+
+  // Reverb（混响）
+  if (els.spaceOn.checked) {
+    chain.reverbWet.gain.setTargetAtTime(space * 0.35 * (low ? 0.5 : 1), now, 0.02);
+  } else {
+    chain.reverbWet.gain.setTargetAtTime(0, now, 0.02);
+  }
+
+  // Send 总线音量
+  chain.sendBus.gain.setTargetAtTime(0.3 * (low ? 0.5 : 1), now, 0.02);
 }
 
 function quantizedDelayTime() {
@@ -702,54 +713,49 @@ function quantizedDelayTime() {
 
 // ─── 离线渲染 ───
 function createRenderGraph(ctx, destination, settings, monitorOverride, preNode) {
-  const input = ctx.createGain(); const dry = ctx.createGain(); const tuned = ctx.createDelay(0.045);
-  const tuneFeedback = ctx.createGain(); const tuneWet = ctx.createGain(); const synthIn = ctx.createGain();
-  const synthWet = ctx.createGain(); const crusher = ctx.createWaveShaper(); const crusherWet = ctx.createGain();
-  const filter = ctx.createBiquadFilter(); const delay = ctx.createDelay(0.7); const delayFeedback = ctx.createGain();
-  const delayWet = ctx.createGain(); const convolver = ctx.createConvolver(); const reverbWet = ctx.createGain();
-  const output = ctx.createGain(); const lfoNode = ctx.createOscillator(); const lfoGain = ctx.createGain();
-  const carrier = ctx.createOscillator(); const carrierGain = ctx.createGain(); const ring = ctx.createGain();
-  const maskHigh = ctx.createBiquadFilter(); const maskBand = ctx.createBiquadFilter(); const maskPeak = ctx.createBiquadFilter();
+  const input = ctx.createGain();
+  const mainOut = ctx.createGain();
+  const dcBlocker = ctx.createBiquadFilter();
+  const limiter = ctx.createDynamicsCompressor();
+  const sendBus = ctx.createGain();
+  const crusher = ctx.createWaveShaper();
+  const crusherFilter = ctx.createBiquadFilter();
+  const crusherWet = ctx.createGain();
+  const delay = ctx.createDelay(0.7);
+  const delayFeedback = ctx.createGain();
+  const delayWet = ctx.createGain();
+  const convolver = ctx.createConvolver();
+  const reverbWet = ctx.createGain();
 
-  lfoNode.type = "square"; lfoNode.frequency.value = 7.5; lfoGain.gain.value = 0.012;
-  lfoNode.connect(lfoGain); lfoGain.connect(tuned.delayTime);
-  carrier.type = "sawtooth"; carrier.frequency.value = settings.carrier;
-  carrierGain.gain.value = settings.synthOn ? 0.65 + settings.synthMix * 0.65 : 0;
-  carrier.connect(carrierGain); carrierGain.connect(ring.gain);
+  dcBlocker.type = "highpass"; dcBlocker.frequency.value = 120;
+  limiter.threshold.value = -12; limiter.knee.value = 12; limiter.ratio.value = 20;
+  limiter.attack.value = 0.001; limiter.release.value = 0.05;
+  crusherFilter.type = "lowpass"; crusherFilter.frequency.value = 7200;
+  convolver.buffer = makeImpulse(ctx, 1.5);
+  crusher.curve = makeCrusherCurve(settings.crush || 0);
 
-  // 如果传入了 preNode（如 AudioWorkletNode），将其插入 input 和效果链之间
   const chainInput = preNode || input;
   if (preNode) input.connect(preNode);
 
-  chainInput.connect(dry); chainInput.connect(tuned);
-  tuned.connect(tuneFeedback); tuneFeedback.connect(tuned); tuned.connect(tuneWet);
-  chainInput.connect(synthIn); synthIn.connect(ring);
-  ring.connect(maskHigh); maskHigh.connect(maskBand); maskBand.connect(maskPeak); maskPeak.connect(synthWet);
-  chainInput.connect(crusher); crusher.connect(filter); filter.connect(crusherWet);
-  chainInput.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet);
-  chainInput.connect(convolver); convolver.connect(reverbWet);
-  dry.connect(output); tuneWet.connect(output); synthWet.connect(output);
-  crusherWet.connect(output); delayWet.connect(output); reverbWet.connect(output);
-  output.connect(destination);
-  filter.type = "lowpass"; filter.frequency.value = settings.tone || 7200; filter.Q.value = 0.65 + settings.crush * 5;
-  maskHigh.type = "highpass"; maskHigh.frequency.value = 180;
-  maskBand.type = "bandpass"; const mm = settings.synthMix > 0.85; maskBand.frequency.value = mm ? 1120 : 1500; maskBand.Q.value = mm ? 2.2 : 1.2;
-  maskPeak.type = "peaking"; maskPeak.frequency.value = 2600; maskPeak.Q.value = 1.1; maskPeak.gain.value = mm ? 10 : 4;
-  convolver.buffer = makeImpulse(ctx, 1.8); crusher.curve = makeCrusherCurve(settings.crush);
-  const maskMode = mm && settings.pitchMix > 0.88;
-  const dryLevel = maskMode ? 0 : Math.max(0.02, 0.42 - settings.pitchMix * 0.28 - settings.synthMix * 0.36);
-  const tuneLevel = settings.pitchOn ? (maskMode ? 0.04 : 0.32 + settings.pitchMix * 0.42) : 0;
-  const synthLevel = settings.synthOn ? (maskMode ? 1.45 : settings.synthMix * 0.98) : 0;
-  const crushLevel = settings.crushOn ? settings.crush * (maskMode ? 0.08 : 0.16) : 0;
-  dry.gain.value = dryLevel; output.gain.value = monitorOverride;
-  tuned.delayTime.value = settings.pitchOn ? 0.004 + settings.pitchMix * (0.008 + (scales[settings.scale]?.includes(0) ? 0 : (scales[settings.scale]?.[0] || 0) / 1200)) * (settings.lowLatency ? 0.45 : 1) : 0.001;
-  tuneFeedback.gain.value = settings.pitchOn ? (0.11 + settings.pitchMix * 0.18) * (settings.lowLatency ? 0.55 : 1) : 0;
-  tuneWet.gain.value = tuneLevel; synthWet.gain.value = synthLevel; crusherWet.gain.value = crushLevel;
-  delay.delayTime.value = 0.12 + settings.delay * 0.38;
-  delayFeedback.gain.value = settings.spaceOn ? settings.delay * 0.48 * (settings.lowLatency ? 0.45 : 1) : 0;
-  delayWet.gain.value = settings.spaceOn ? settings.delay * 0.36 * (settings.lowLatency ? 0.4 : 1) : 0;
-  reverbWet.gain.value = settings.spaceOn ? settings.reverb * 0.42 * (settings.lowLatency ? 0.55 : 1) : 0;
-  lfoNode.start(0); carrier.start(0);
+  chainInput.connect(mainOut);
+  mainOut.connect(dcBlocker);
+  dcBlocker.connect(limiter);
+  limiter.connect(destination);
+
+  // Send effects
+  chainInput.connect(sendBus);
+  sendBus.connect(crusher); crusher.connect(crusherFilter); crusherFilter.connect(crusherWet); crusherWet.connect(destination);
+  sendBus.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet); delayWet.connect(destination);
+  sendBus.connect(convolver); convolver.connect(reverbWet); reverbWet.connect(destination);
+
+  mainOut.gain.value = (monitorOverride || 0.7) * 0.7;
+  sendBus.gain.value = 0.3;
+  crusherWet.gain.value = settings.crushOn && settings.crush ? settings.crush * 0.15 : 0;
+  delay.delayTime.value = 0.12 + (settings.delay || 0.16) * 0.38;
+  delayFeedback.gain.value = settings.spaceOn ? (settings.delay || 0.16) * 0.35 : 0;
+  delayWet.gain.value = settings.spaceOn ? (settings.delay || 0.16) * 0.25 : 0;
+  reverbWet.gain.value = settings.spaceOn ? (settings.reverb || 0.16) * 0.3 : 0;
+
   return input;
 }
 
