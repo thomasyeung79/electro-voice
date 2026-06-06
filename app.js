@@ -526,6 +526,13 @@ function createEffectChain(ctx) {
   const analyser = ctx.createAnalyser();
   const capture = ctx.createScriptProcessor(4096, 2, 2);
   const captureMute = ctx.createGain();
+  // 反馈抑制：限制器 + 低频切除
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 12;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.1;
 
   lfo = ctx.createOscillator();
   const lfoGain = ctx.createGain();
@@ -550,7 +557,7 @@ function createEffectChain(ctx) {
   autoTuneNode.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet);
   autoTuneNode.connect(convolver); convolver.connect(reverbWet);
   dry.connect(output); tuneWet.connect(output); synthWet.connect(output); crusherWet.connect(output); delayWet.connect(output); reverbWet.connect(output);
-  output.connect(analyser); output.connect(capture); capture.connect(captureMute); captureMute.connect(ctx.destination); analyser.connect(ctx.destination);
+  output.connect(limiter); limiter.connect(analyser); limiter.connect(capture); capture.connect(captureMute); captureMute.connect(ctx.destination); analyser.connect(ctx.destination);
 
   analyser.fftSize = 2048;
   filter.type = "lowpass";
@@ -559,7 +566,7 @@ function createEffectChain(ctx) {
   maskPeak.type = "peaking"; maskPeak.frequency.value = 2600; maskPeak.Q.value = 1.1; maskPeak.gain.value = 8;
   convolver.buffer = makeImpulse(ctx, 1.8);
   crusher.curve = makeCrusherCurve(0.28);
-  output.gain.value = 0.86;
+  output.gain.value = 0.65;
   captureMute.gain.value = 0;
   capture.onaudioprocess = (event) => {
     if (!wavRecording) return;
@@ -928,15 +935,15 @@ const PRESET_STORAGE_KEY = 'electro-voice-user-presets';
 
 function applyPreset(name) {
   const presets = {
-    experimental: { pitchOn: true, pitchMix: 100, scale: "minor", synthOn: true, synthMix: 100, carrier: 72, crushOn: true, crush: 18, space: 42, spaceOn: true, lowLatency: false, monitor: 72, autoTuneMix: 100, warm: 70, mode: 'ethereal', strength: 90, distortion: 25, bitcrush: 8 },
-    popVocal:    { pitchOn: true, pitchMix: 76, scale: "major", synthOn: true, synthMix: 34, carrier: 132, crushOn: true, crush: 3, space: 14, spaceOn: true, lowLatency: true, monitor: 78, autoTuneMix: 65, warm: 85, mode: 'autoTune', strength: 70, distortion: 0, bitcrush: 0 },
-    rapHook:     { pitchOn: true, pitchMix: 88, scale: "minor", synthOn: true, synthMix: 58, carrier: 112, crushOn: true, crush: 6, space: 18, spaceOn: true, lowLatency: true, monitor: 76, autoTuneMix: 80, warm: 60, mode: 'autoTune', strength: 85, distortion: 3, bitcrush: 2 },
-    instrumentModern: { pitchOn: false, pitchMix: 24, scale: "chromatic", synthOn: true, synthMix: 82, carrier: 64, crushOn: true, crush: 22, space: 34, spaceOn: true, lowLatency: false, monitor: 74, autoTuneMix: 40, warm: 40, mode: 'alien', strength: 50, distortion: 15, bitcrush: 10 },
-    hardTune:    { pitchOn: true, pitchMix: 96, scale: "minor", synthOn: true, synthMix: 94, carrier: 88, crushOn: true, crush: 6, space: 16, spaceOn: true, lowLatency: true, monitor: 78, autoTuneMix: 100, warm: 50, mode: 'hardcore', strength: 95, distortion: 15, bitcrush: 5 },
-    hyperpop:    { pitchOn: true, pitchMix: 95, synthOn: true, synthMix: 54, carrier: 128, crushOn: true, crush: 34, space: 42, spaceOn: true, lowLatency: false, monitor: 72, autoTuneMix: 95, warm: 30, mode: 'autoTune', strength: 95, distortion: 30, bitcrush: 15, scale: "chromatic" },
-    robot:       { pitchOn: true, pitchMix: 62, synthOn: true, synthMix: 88, carrier: 82, crushOn: true, crush: 46, space: 20, spaceOn: true, lowLatency: false, monitor: 68, autoTuneMix: 70, warm: 20, mode: 'robot', strength: 60, distortion: 5, bitcrush: 40, scale: "minor" },
-    dream:       { pitchOn: true, pitchMix: 70, synthOn: true, synthMix: 32, carrier: 110, crushOn: true, crush: 16, space: 68, spaceOn: true, lowLatency: false, monitor: 74, autoTuneMix: 75, warm: 80, mode: 'ethereal', strength: 70, distortion: 0, bitcrush: 0, scale: "major" },
-    clean:       { pitchOn: true, pitchMix: 48, synthOn: true, synthMix: 20, carrier: 140, crushOn: true, crush: 8, space: 22, spaceOn: true, lowLatency: true, monitor: 80, autoTuneMix: 50, warm: 90, mode: 'autoTune', strength: 45, distortion: 0, bitcrush: 0, scale: "major" },
+    experimental: { pitchOn: true, pitchMix: 100, scale: "minor", synthOn: true, synthMix: 100, carrier: 72, crushOn: true, crush: 18, space: 42, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 100, warm: 70, mode: 'ethereal', strength: 90, distortion: 25, bitcrush: 8 },
+    popVocal:    { pitchOn: true, pitchMix: 76, scale: "major", synthOn: true, synthMix: 34, carrier: 132, crushOn: true, crush: 3, space: 14, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 65, warm: 85, mode: 'autoTune', strength: 70, distortion: 0, bitcrush: 0 },
+    rapHook:     { pitchOn: true, pitchMix: 88, scale: "minor", synthOn: true, synthMix: 58, carrier: 112, crushOn: true, crush: 6, space: 18, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 80, warm: 60, mode: 'autoTune', strength: 85, distortion: 3, bitcrush: 2 },
+    instrumentModern: { pitchOn: false, pitchMix: 24, scale: "chromatic", synthOn: true, synthMix: 82, carrier: 64, crushOn: true, crush: 22, space: 34, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 40, warm: 40, mode: 'alien', strength: 50, distortion: 15, bitcrush: 10 },
+    hardTune:    { pitchOn: true, pitchMix: 96, scale: "minor", synthOn: true, synthMix: 94, carrier: 88, crushOn: true, crush: 6, space: 16, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 100, warm: 50, mode: 'hardcore', strength: 95, distortion: 15, bitcrush: 5 },
+    hyperpop:    { pitchOn: true, pitchMix: 95, synthOn: true, synthMix: 54, carrier: 128, crushOn: true, crush: 34, space: 42, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 95, warm: 30, mode: 'autoTune', strength: 95, distortion: 30, bitcrush: 15, scale: "chromatic" },
+    robot:       { pitchOn: true, pitchMix: 62, synthOn: true, synthMix: 88, carrier: 82, crushOn: true, crush: 46, space: 20, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 70, warm: 20, mode: 'robot', strength: 60, distortion: 5, bitcrush: 40, scale: "minor" },
+    dream:       { pitchOn: true, pitchMix: 70, synthOn: true, synthMix: 32, carrier: 110, crushOn: true, crush: 16, space: 68, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 75, warm: 80, mode: 'ethereal', strength: 70, distortion: 0, bitcrush: 0, scale: "major" },
+    clean:       { pitchOn: true, pitchMix: 48, synthOn: true, synthMix: 20, carrier: 140, crushOn: true, crush: 8, space: 22, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 50, warm: 90, mode: 'autoTune', strength: 45, distortion: 0, bitcrush: 0, scale: "major" },
   };
 
   const p = presets[name];
