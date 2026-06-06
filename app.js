@@ -1,6 +1,8 @@
-// ══════════════════════════════════════════════════════════════════�?//  Electro Voice �?实时电音变声�?(Merged)
-//  融合 5 种电音模�?+ 音阶量化修音 + 失真/比特压缩
-// ══════════════════════════════════════════════════════════════════�?
+// ═══════════════════════════════════════════════════════════════════
+//  Electro Voice — 实时电音变声器 (Merged)
+//  融合 5 种电音模式 + 音阶量化修音 + 失真/比特压缩
+// ═══════════════════════════════════════════════════════════════════
+
 // ─── AudioWorklet 内联 DSP ───────────────────────────────────────
 const WORKLET_CODE = `
 const SCALE_MAP = {
@@ -11,7 +13,6 @@ const SCALE_MAP = {
 };
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
-// ── 自相关音高检测（带抛物线插值） ──
 function detectPitch(buf, sr) {
   const len = buf.length;
   const minF = 65, maxF = 900;
@@ -29,7 +30,7 @@ function detectPitch(buf, sr) {
     if (r > bestR) { bestR = r; bestT = t; }
   }
   if (bestR < 0.08 || bestT === 0) return -1;
-  // 抛物线插值，三个点用同一归一化方�?  function normCorrAt(t) {
+  function normCorrAt(t) {
     if (t < 1 || t >= len) return 0;
     const n = len - t; let corr = 0, e1 = 0, e2 = 0;
     for (let i = 0; i < n; i++) { const s = buf[i]; corr += s * buf[i + t]; e1 += s * s; }
@@ -44,7 +45,6 @@ function detectPitch(buf, sr) {
   return sr / bestT;
 }
 
-// ── 频率 �?最近音阶音�?──
 function quantizePitch(freq, intervals, rootNote) {
   if (freq <= 0) return -1;
   const midi = 12 * Math.log2(freq / 440) + 69;
@@ -60,7 +60,6 @@ function quantizePitch(freq, intervals, rootNote) {
   return 440 * Math.pow(2, (targetMidi - 69) / 12);
 }
 
-// ── 简单音高锁定（回到 12 平均律最近音�?──
 function snapToEqualTemperament(freq) {
   if (freq <= 0) return -1;
   const midi = 12 * Math.log2(freq / 440) + 69;
@@ -68,7 +67,6 @@ function snapToEqualTemperament(freq) {
   return 440 * Math.pow(2, (snapped - 69) / 12);
 }
 
-// ── 处理�?──
 class ElectroVoiceWorklet extends AudioWorkletProcessor {
   constructor() {
     super();
@@ -77,14 +75,13 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
     this.sr = sampleRate;
     this.detectEvery = 256;
     this.sampleCount = 0;
-
     this.rawPitch = [-1, -1, -1, -1, -1];
     this.pitchIdx = 0;
     this.smoothedFreq = -1;
     this.phase = 0; this.phase2 = 0;
 
-    // 参数 �?以原声为主避免啸�?    this.mode = 'autoTune';
-    this.mix = 0.35;         // 35% 合成�? 65% 原声
+    this.mode = 'autoTune';
+    this.mix = 0.35;
     this.strength = 0.7;
     this.formant = 0.5;
     this.distortion = 0;
@@ -95,18 +92,15 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
     this.rootNote = 60;
     this.tuneMix = 0.5;
 
-    // 平滑包络（消除爆音）
-    this.smoothAmp = 0;        // 平滑后的振幅
-    this.attack = 0.002;       // 起音时间（系数）
-    this.release = 0.0005;     // 释音时间
-
-    // DC blocker
-    this.dcIn1 = 0; this.dcIn2 = 0; this.dcOut1 = 0; this.dcOut2 = 0;
-    const R = 0.995;
-    this.dcR = R;
-
-    // 共振峰（一阶低�?高通）
+    this.smoothAmp = 0;
+    this.attack = 0.003;
+    this.release = 0.0005;
+    this.dc1 = 0; this.dc2 = 0; this.dco = 0;
     this.fpPrev = 0;
+
+    this.lastPitchMidi = -1;
+    this.stablePitchFrames = 0;
+    this.feedbackSuppress = 0;
 
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -125,194 +119,108 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
   process(inputs, outputs) {
     const inp = inputs[0], out = outputs[0];
     if (!inp || !inp[0] || !out || !out[0]) return true;
-
     const ch = inp[0], och = out[0], len = ch.length;
 
-    // 写环形缓�?    for (let i = 0; i < len; i++) {
-      this.buf[this.wp] = ch[i];
-      this.wp = (this.wp + 1) % this.buf.length;
-    }
+    for (let i = 0; i < len; i++) { this.buf[this.wp] = ch[i]; this.wp = (this.wp + 1) % this.buf.length; }
 
-    // ── 音高检�?──
     this.sampleCount += len;
     let detectedFreq = this.smoothedFreq;
     if (this.sampleCount >= this.detectEvery) {
       this.sampleCount = 0;
       const dbuf = new Float32Array(2048);
-      let rp = this.wp - 2048;
-      if (rp < 0) rp += this.buf.length;
+      let rp = this.wp - 2048; if (rp < 0) rp += this.buf.length;
       for (let i = 0; i < 2048; i++) dbuf[i] = this.buf[(rp + i) % this.buf.length];
-
       const p = detectPitch(dbuf, this.sr);
-      this.rawPitch[this.pitchIdx % 5] = p;
-      this.pitchIdx++;
+      this.rawPitch[this.pitchIdx % 5] = p; this.pitchIdx++;
       const valid = this.rawPitch.filter(x => x > 0);
-      if (valid.length >= 2) {
-        const sorted = [...valid].sort((a, b) => a - b);
-        detectedFreq = sorted[Math.floor(sorted.length / 2)];
-      } else if (valid.length === 1) {
-        detectedFreq = valid[0];
-      } else {
-        detectedFreq = -1;
-      }
+      if (valid.length >= 2) { const s = [...valid].sort((a,b)=>a-b); detectedFreq = s[Math.floor(s.length/2)]; }
+      else if (valid.length === 1) detectedFreq = valid[0];
+      else detectedFreq = -1;
 
-      // 音阶量化
       if (detectedFreq > 0) {
         if (this.mode === 'autoTune' || this.mode === 'ethereal') {
           const q = quantizePitch(detectedFreq, this.intervals, this.rootNote);
           if (q > 0) detectedFreq = detectedFreq + (q - detectedFreq) * this.strength;
         } else if (this.mode === 'robot' || this.mode === 'hardcore') {
-          const sn = snapToEqualTemperament(detectedFreq);
-          if (sn > 0) detectedFreq = sn;
+          const s = snapToEqualTemperament(detectedFreq);
+          if (s > 0) detectedFreq = s;
         }
       }
-
-      // 平滑
       if (detectedFreq > 0) {
-        if (this.smoothedFreq < 0) {
-          this.smoothedFreq = detectedFreq;
-        } else {
-          this.smoothedFreq += (detectedFreq - this.smoothedFreq) * 0.35;
-        }
+        if (this.smoothedFreq < 0) this.smoothedFreq = detectedFreq;
+        else this.smoothedFreq += (detectedFreq - this.smoothedFreq) * 0.35;
       } else {
         if (this.smoothedFreq > 0) { this.smoothedFreq *= 0.98; if (this.smoothedFreq < 50) this.smoothedFreq = -1; }
       }
 
-      // 上报
       if (this.smoothedFreq > 0) {
         const midi = Math.round(12 * Math.log2(this.smoothedFreq / 440) + 69);
+        if (midi === this.lastPitchMidi) this.stablePitchFrames++;
+        else this.stablePitchFrames = 0;
+        this.lastPitchMidi = midi;
+        if (this.stablePitchFrames > 15 && this.smoothAmp > 0.01 && this.smoothAmp < 0.05)
+          this.feedbackSuppress = Math.min(1, this.feedbackSuppress + 0.02);
+        else this.feedbackSuppress = Math.max(0, this.feedbackSuppress - 0.01);
         const n = midi % 12, oct = Math.floor(midi / 12) - 1;
-        this.port.postMessage({ type: 'pitch', freq: Math.round(this.smoothedFreq * 10) / 10,
-          note: NOTE_NAMES[((n % 12) + 12) % 12] + oct, midi, active: true });
-      } else {
-        this.port.postMessage({ type: 'pitch', active: false });
-      }
+        this.port.postMessage({ type:'pitch', freq:Math.round(this.smoothedFreq*10)/10, note:NOTE_NAMES[((n%12)+12)%12]+oct, midi, active:true });
+      } else { this.feedbackSuppress = Math.max(0, this.feedbackSuppress - 0.02); this.port.postMessage({ type:'pitch', active:false }); }
     }
 
-    // ── 逐样本处�?──
+    const fbGain = 1 - this.feedbackSuppress * 0.8;
     for (let i = 0; i < len; i++) {
       const s = ch[i];
-
-      // 包络跟随（平�?attack/release，避免硬开关爆音）
       const abs = Math.abs(s);
-      const envTarget = abs;
-      if (envTarget > this.smoothAmp) {
-        this.smoothAmp += (envTarget - this.smoothAmp) * this.attack;
-      } else {
-        this.smoothAmp += (envTarget - this.smoothAmp) * this.release;
-      }
+      if (abs > this.smoothAmp) this.smoothAmp += (abs - this.smoothAmp) * this.attack;
+      else this.smoothAmp += (abs - this.smoothAmp) * this.release;
 
-      let processed = 0;
+      let wet = 0;
       const sp = this.smoothedFreq;
       const amp = Math.sqrt(Math.max(0.0001, this.smoothAmp));
+      const hasSignal = sp > 0 && this.smoothAmp > 0.003;
 
-      // 只有在信号够强且有音高时才合成（但不要硬切，用振幅渐变）
-      const hasSignal = sp > 0 && this.smoothAmp > 0.002;
-
-      if (hasSignal) {
-        // ── 确定目标频率 ──
-        let targetFreq = sp;
-        switch (this.mode) {
-          case 'autoTune': targetFreq = sp; break;
-          case 'robot':
-            targetFreq = snapToEqualTemperament(sp);
-            if (targetFreq < 0) targetFreq = sp;
-            break;
-          case 'alien':
-            targetFreq = sp * (0.5 + this.formant * 1.5);
-            break;
-          case 'ethereal': targetFreq = sp; break;
-          case 'hardcore':
-            targetFreq = snapToEqualTemperament(sp);
-            if (targetFreq < 0) targetFreq = sp;
-            break;
-          default: targetFreq = sp;
-        }
-        targetFreq = Math.max(50, Math.min(2000, targetFreq));
-
-        // ── 相位递进（永不重置，避免相位跳跃爆音�?──
-        this.phase += 2 * Math.PI * targetFreq / this.sr;
-        if (this.phase > 2 * Math.PI) this.phase -= 2 * Math.PI;
-
-        // ── 软波形合成（消除方波硬切导致的混叠） ──
-        let sig;
-        const p = this.phase;
-        switch (this.mode) {
-          case 'autoTune':
-          case 'ethereal':
-            sig = Math.sin(p) * 0.65 +
-                  Math.sin(p * 2) * 0.25 +
-                  Math.sin(p * 3) * 0.1;
-            break;
-          case 'alien':
-            sig = Math.sin(p) * 0.75 +
-                  Math.sin(p * 3) * 0.25;
-            break;
-          case 'robot':
-            // 软方波：tanh(sin * gain)
-            sig = Math.tanh(Math.sin(p) * 3.0) * 0.5 +
-                  Math.sin(p) * 0.25 +
-                  Math.sin(p * 2) * 0.15 +
-                  Math.sin(p * 3) * 0.1;
-            break;
-          case 'hardcore':
-            // 软方�?+ 更多失真
-            sig = Math.tanh(Math.sin(p) * 4.0) * 0.55 +
-                  Math.sin(p) * 0.35;
-            break;
-          default:
-            sig = Math.sin(p);
-        }
-
-        // ethereal: 微量失谐第二声部
-        if (this.mode === 'ethereal') {
-          this.phase2 += 2 * Math.PI * targetFreq * 1.005 / this.sr;
-          if (this.phase2 > 2 * Math.PI) this.phase2 -= 2 * Math.PI;
-          sig = sig * 0.6 + Math.sin(this.phase2) * 0.4;
-        }
-
-        // 温暖度混�?        if (this.mode === 'autoTune' || this.mode === 'ethereal') {
-          sig *= (0.7 + this.warmth * 0.3);
-        }
-
-        // 用平滑振幅包络（消除爆音�?        processed = sig * amp;
-
-        // 共振峰（一阶滤波器，避�?prevDry 混入未处理信号）
-        if (this.mode !== 'autoTune' && this.mode !== 'ethereal') {
-          const tilt = (this.formant - 0.5) * 2;  // -1 ~ 1
-          // 简单一�?shelving
-          const a = 0.15;
-          this.fpPrev = this.fpPrev * (1 - a) + processed * a;
-          processed = processed + this.fpPrev * tilt * 0.3;
+      if (hasSignal && this.mix > 0.01) {
+        if (this.mode === 'autoTune' || this.mode === 'ethereal') {
+          // 合成波表（保留原声包络）
+          this.phase += 2 * Math.PI * sp / this.sr;
+          if (this.phase > 2 * Math.PI) this.phase -= 2 * Math.PI;
+          wet = Math.sin(this.phase) * 0.65 + Math.sin(this.phase * 2) * 0.25 + Math.sin(this.phase * 3) * 0.1;
+          if (this.mode === 'ethereal') {
+            this.phase2 += 2 * Math.PI * sp * 1.005 / this.sr;
+            if (this.phase2 > 2 * Math.PI) this.phase2 -= 2 * Math.PI;
+            wet = wet * 0.6 + Math.sin(this.phase2) * 0.4;
+          }
+          wet *= amp * 1.2;
+        } else {
+          let targetFreq = sp;
+          if (this.mode === 'alien') targetFreq = sp * (0.5 + this.formant * 1.5);
+          targetFreq = Math.max(50, Math.min(2000, targetFreq));
+          this.phase += 2 * Math.PI * targetFreq / this.sr;
+          if (this.phase > 2 * Math.PI) this.phase -= 2 * Math.PI;
+          const p = this.phase;
+          if (this.mode === 'robot') wet = Math.tanh(Math.sin(p)*3)*0.5 + Math.sin(p)*0.25;
+          else if (this.mode === 'alien') wet = Math.sin(p)*0.75 + Math.sin(p*3)*0.25;
+          else wet = Math.tanh(Math.sin(p)*4)*0.55 + Math.sin(p)*0.35;
+          wet *= amp * 1.2;
+          const tilt = (this.formant - 0.5) * 2;
+          const a = 0.15; this.fpPrev = this.fpPrev*(1-a) + wet*a;
+          wet += this.fpPrev * tilt * 0.3;
         }
       }
 
-      // ── 失真（用 soft clip 代替 tanh/tanh 除法，避免除零爆音） ──
-      let wet = processed;
-      if (this.distortion > 0.01) {
+      if (this.distortion > 0.01 && this.mode !== 'autoTune') {
         const drive = 1 + this.distortion * 6;
-        // soft clip: atan �?tanh 更温�?        let x = wet * drive;
-        const clip = Math.atan(x) / Math.atan(drive);
+        const clip = Math.atan(wet * drive) / Math.atan(drive);
         wet = wet * (1 - this.distortion * 0.3) + clip * (this.distortion * 0.3);
       }
-
-      // ── 比特压缩 ──
-      if (this.bitcrush > 0.01) {
+      if (this.bitcrush > 0.01 && this.mode !== 'autoTune') {
         const steps = Math.max(2, Math.round(256 * (1 - this.bitcrush)));
-        const stepSize = 2 / steps;
-        wet = Math.round(wet / stepSize) * stepSize;
+        wet = Math.round(wet / (2/steps)) * (2/steps);
       }
 
-      // ── 干湿混合 ──
-      const outMix = this.mix;
-      let result = s * (1 - outMix) + wet * outMix;
-
-      // ── DC blocker ──
-      this.dcIn1 = this.dcIn2; this.dcIn2 = result;
-      result = this.dcIn2 - this.dcIn1 + this.dcR * this.dcOut1;
-      this.dcOut1 = result;
-
-      // ── 削波保护 ──
+      wet *= fbGain;
+      let result = s * (1 - this.mix) + wet * this.mix;
+      this.dc1 = this.dc2; this.dc2 = result;
+      result = this.dc2 - this.dc1 + 0.995 * this.dco; this.dco = result;
       och[i] = Math.max(-1, Math.min(1, result));
     }
     return true;
@@ -321,8 +229,10 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
 registerProcessor('electro-voice-worklet', ElectroVoiceWorklet);
 `;
 
-// ══════════════════════════════════════════════════════════════════�?//  Main Thread
-// ══════════════════════════════════════════════════════════════════�?
+// ═══════════════════════════════════════════════════════════════════
+//  Main Thread
+// ═══════════════════════════════════════════════════════════════════
+
 const els = {
   scope: document.querySelector("#scope"),
   status: document.querySelector("#status"),
@@ -356,7 +266,7 @@ const els = {
   crush: document.querySelector("#crush"),
   spaceOn: document.querySelector("#spaceOn"),
   space: document.querySelector("#space"),
-  // �?新增元素 �?  noteDisplay: document.querySelector("#noteDisplay"),
+  noteDisplay: document.querySelector("#noteDisplay"),
   freqDisplay: document.querySelector("#freqDisplay"),
   autoTuneMix: document.querySelector("#autoTuneMix"),
   presetLoad: document.querySelector("#presetLoad"),
@@ -364,7 +274,7 @@ const els = {
   presetDelete: document.querySelector("#presetDelete"),
   spectrumToggle: document.querySelector("#spectrumToggle"),
   warm: document.querySelector("#warm"),
-  // �?来自 electro-voice.html 的模式元�?�?  modeBtns: document.querySelectorAll('.voice-mode-btn'),
+  modeBtns: document.querySelectorAll('.voice-mode-btn'),
   modeInfo: document.querySelector("#modeInfo"),
   modeLabel: document.querySelector("#modeLabel"),
   strength: document.querySelector("#strength"),
@@ -388,24 +298,13 @@ const outs = {
   bitcrush: document.querySelector("#bitcrushOut"),
 };
 
-let audio;
-let chain;
-let liveStream;
-let liveSource;
-let fileBuffer;
-let fileSource;
-let drawId;
-let lfo;
-let wavRecording = false;
-let wavLeft = [];
-let wavRight = [];
-let wavLength = 0;
-let captureSampleRate = 44100;
-let lastDownloadUrl = "";
-let lastDownloadBlob = null;
-let lastDownloadName = "electro-voice.wav";
-let autoTuneNode = null;
-let useSpectrum = false;
+const MODE_INFO = {
+  autoTune: { label: '经典电音', desc: '将声音自动修正到最近音阶，产生标志性电音效果，适合唱歌和说话' },
+  robot:    { label: '机器人',   desc: '用方波重新合成人声，打造机械感十足的机器人嗓音' },
+  alien:    { label: '外星人',   desc: '改变共振峰频率，制造非人类的外星生物声线' },
+  ethereal: { label: '空灵',     desc: '电音修音 + 双声部合唱，营造空灵缥缈的氛围感' },
+  hardcore: { label: '电子核',   desc: '暴力电音 + 失真 + 比特压缩，极致电子工业风' },
+};
 
 const scales = {
   major: [0, 2, 4, 5, 7, 9, 11],
@@ -414,57 +313,44 @@ const scales = {
   chromatic: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
 };
 
-// 模式信息
-const MODE_INFO = {
-  autoTune: { label: '经典电音', desc: '将声音自动修正到最近音阶，产生标志性电音效果，适合唱歌和说�? },
-  robot:    { label: '机器�?,   desc: '用方波重新合成人声，打造机械感十足的机器人嗓音' },
-  alien:    { label: '外星�?,   desc: '改变共振峰频率，制造非人类的外星生物声�? },
-  ethereal: { label: '空灵',     desc: '电音修音 + 双声部合唱，营造空灵缥缈的氛围�? },
-  hardcore: { label: '电子�?,   desc: '暴力电音 + 失真 + 比特压缩，极致电子工业风' },
-};
+const PRESET_STORAGE_KEY = 'electro-voice-user-presets';
+const presetLabels = { experimental: "实验电子", popVocal: "流行人声", rapHook: "说唱 Hook", instrumentModern: "器乐现代化", hardTune: "硬调电音", hyperpop: "Hyperpop", robot: "机器人", dream: "梦幻电台", clean: "清爽" };
 
-function setStatus(text) {
-  if (els.status) els.status.textContent = text;
-  if (els.inlineStatus) els.inlineStatus.textContent = text;
-}
-function setMicInfo(state, detail) {
-  if (els.micState) els.micState.textContent = state;
-  if (els.micDevice) els.micDevice.textContent = detail;
-}
+let audio, chain, liveStream, liveSource, fileBuffer, fileSource, drawId, lfo;
+let wavRecording = false, wavLeft = [], wavRight = [], wavLength = 0, captureSampleRate = 44100;
+let lastDownloadUrl = "", lastDownloadBlob = null, lastDownloadName = "electro-voice.wav";
+let autoTuneNode = null, useSpectrum = false;
 
-// ─── 麦克�?───
+// ─── 工具函数 ───
+function setStatus(text) { if (els.status) els.status.textContent = text; if (els.inlineStatus) els.inlineStatus.textContent = text; }
+function setMicInfo(state, detail) { if (els.micState) els.micState.textContent = state; if (els.micDevice) els.micDevice.textContent = detail; }
+
+// ─── 麦克风检测 ───
 async function getMicPermissionState() {
   if (!navigator.permissions?.query) return "unknown";
   try { const p = await navigator.permissions.query({ name: "microphone" }); p.onchange = () => detectMicrophones(); return p.state; } catch { return "unknown"; }
 }
-async function requestTemporaryMicStream() {
-  const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-  s.getTracks().forEach(t => t.stop());
-}
-async function detectMicrophones(options = {}) {
-  const { requestPermission = false } = options;
+async function detectMicrophones() {
   if (!navigator.mediaDevices?.enumerateDevices) { setMicInfo("浏览器不支持", "无麦克风设备列表"); return; }
   try {
     const state = await getMicPermissionState();
-    if (requestPermission && state !== "granted") { setMicInfo("等待授权", "请在浏览器弹窗允许麦克风"); await requestTemporaryMicStream(); }
-    const devs = await Promise.race([navigator.mediaDevices.enumerateDevices(), new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),2000))]);
+    const timer = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 2000));
+    const devs = await Promise.race([navigator.mediaDevices.enumerateDevices(), timer]);
     const mics = devs.filter(d => d.kind === "audioinput");
-    if (!mics.length) { setMicInfo("⚠️ 未检测到麦克�?, "检查设备连接或重新插拔"); return; }
+    if (!mics.length) { setMicInfo("未检测到麦克风", "检查设备连接或重新插拔"); return; }
     const named = mics.map(d => d.label).filter(Boolean);
     if (!named.length) {
-      if (state === "denied") { setMicInfo("🚫 权限已拒�?, "请修改浏览器权限后刷�?); setStatus("麦克风权限被拒绝，请在地址栏权限设置中允许麦克风�?); return; }
-      // 有设备但没名�?= 需要先授权
-      setMicInfo("🔄 检测到 " + mics.length + " 个输入设�?, "点击「实时传声」授权麦克风后显示名�?);
-      return;
+      if (state === "denied") { setMicInfo("权限已拒绝", "请修改浏览器权限后刷新"); setStatus("麦克风权限被拒绝，请在地址栏权限设置中允许麦克风。"); return; }
+      setMicInfo("检测到 " + mics.length + " 个输入设备", "点击「实时传声」授权麦克风后显示名称"); return;
     }
-    setMicInfo("�?麦克风已就绪", named.slice(0, 2).join(" / ") + (named.length > 2 ? " �?" + named.length + " �? : ""));
-  } catch (err) { setMicInfo("无法读取麦克�?, err.name === "NotAllowedError" ? "权限被拒�? : err.message); }
+    setMicInfo("麦克风已就绪", named.slice(0, 2).join(" / ") + (named.length > 2 ? " 等 " + named.length + " 个" : ""));
+  } catch (err) { setMicInfo("无法读取麦克风", err.name === "NotAllowedError" ? "权限被拒绝" : (err.message || "超时")); }
 }
 function showActiveInput(stream) {
   const [track] = stream.getAudioTracks();
-  if (!track) { setMicInfo("无输入轨�?, ""); return; }
+  if (!track) { setMicInfo("无输入轨道", ""); return; }
   const s = track.getSettings?.() || {};
-  setMicInfo("正在使用麦克�?, track.label + (s.sampleRate ? " · " + s.sampleRate + " Hz" : ""));
+  setMicInfo("正在使用麦克风", track.label + (s.sampleRate ? " / " + s.sampleRate + " Hz" : ""));
 }
 
 // ─── AudioWorklet ───
@@ -475,20 +361,15 @@ async function loadWorklet(ctx) {
   URL.revokeObjectURL(url);
 }
 
-// ─── 创建效果�?───
+// ─── 创建效果链 ───
 async function ensureAudio() {
   if (audio) { await audio.resume(); return; }
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) throw new Error("浏览器不支持 Web Audio");
   audio = new AC({ latencyHint: "interactive", sampleRate: 48000 });
   await loadWorklet(audio);
-
   autoTuneNode = new AudioWorkletNode(audio, 'electro-voice-worklet');
-  autoTuneNode.port.onmessage = (e) => {
-    const d = e.data;
-    if (d.type === 'pitch') updatePitchDisplay(d);
-  };
-
+  autoTuneNode.port.onmessage = (e) => { const d = e.data; if (d.type === 'pitch') updatePitchDisplay(d); };
   chain = createEffectChain(audio);
   updateEffectValues();
   drawScope();
@@ -496,20 +377,14 @@ async function ensureAudio() {
 
 function createEffectChain(ctx) {
   const input = ctx.createGain();
-
-  // ── 主输出链（干净的直接路径） ──
   const mainOutput = ctx.createGain();
   const dcBlocker = ctx.createBiquadFilter();
-  dcBlocker.type = "highpass";
-  dcBlocker.frequency.value = 120;
+  dcBlocker.type = "highpass"; dcBlocker.frequency.value = 120;
   const limiter = ctx.createDynamicsCompressor();
-  limiter.threshold.value = -12;
-  limiter.knee.value = 12;
-  limiter.ratio.value = 20;
-  limiter.attack.value = 0.001;
-  limiter.release.value = 0.05;
-
-  // ── Send 效果（并行发送，不会改变主信号） ──
+  limiter.threshold.value = -12; limiter.knee.value = 12; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.05;
+  const analyser = ctx.createAnalyser();
+  const capture = ctx.createScriptProcessor(4096, 2, 2);
+  const captureMute = ctx.createGain();
   const crusher = ctx.createWaveShaper();
   const crusherFilter = ctx.createBiquadFilter();
   const crusherWet = ctx.createGain();
@@ -518,31 +393,7 @@ function createEffectChain(ctx) {
   const delayWet = ctx.createGain();
   const convolver = ctx.createConvolver();
   const reverbWet = ctx.createGain();
-  const sendBus = ctx.createGain();   // 发送总线
-
-  // ── 分析 + 录制 ──
-  const analyser = ctx.createAnalyser();
-  let capture, captureMute;
-  try {
-    capture = ctx.createScriptProcessor(4096, 2, 2);
-    captureMute = ctx.createGain();
-    capture.connect(captureMute);
-    captureMute.connect(ctx.destination);
-    capture.onaudioprocess = (event) => {
-      if (!wavRecording) return;
-      const l = event.inputBuffer.getChannelData(0);
-      const r = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : l;
-      wavLeft.push(new Float32Array(l)); wavRight.push(new Float32Array(r)); wavLength += l.length;
-    };
-    captureMute.gain.value = 0;
-  } catch (e) {
-    console.warn('录制降级:', e.message);
-    capture = null;
-  }
-
-  // 信号流：
-  // input �?autoTuneNode �?mainOutput �?dcBlocker �?limiter �?analyser / capture �?destination
-  //                      ↕→ sendBus �?crusher / delay / reverb �?mix back
+  const sendBus = ctx.createGain();
 
   input.connect(autoTuneNode);
   autoTuneNode.connect(mainOutput);
@@ -550,41 +401,32 @@ function createEffectChain(ctx) {
   dcBlocker.connect(limiter);
   limiter.connect(analyser);
   analyser.connect(ctx.destination);
-  if (capture) limiter.connect(capture);
+  try { capture.connect(captureMute); captureMute.connect(ctx.destination); captureMute.gain.value = 0; } catch {}
+  capture.onaudioprocess = (event) => {
+    if (!wavRecording) return;
+    const l = event.inputBuffer.getChannelData(0);
+    const r = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : l;
+    wavLeft.push(new Float32Array(l)); wavRight.push(new Float32Array(r)); wavLength += l.length;
+  };
 
-  // Send 效果 �?也送进 analyser 做可视化
   autoTuneNode.connect(sendBus);
   sendBus.connect(crusher); crusher.connect(crusherFilter); crusherFilter.connect(crusherWet); crusherWet.connect(analyser);
   sendBus.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet); delayWet.connect(analyser);
   sendBus.connect(convolver); convolver.connect(reverbWet); reverbWet.connect(analyser);
 
   analyser.fftSize = 2048;
-  crusherFilter.type = "lowpass";
-  crusherFilter.frequency.value = 7200;
+  crusherFilter.type = "lowpass"; crusherFilter.frequency.value = 7200;
   convolver.buffer = makeImpulse(ctx, 1.5);
-  crusher.curve = makeCrusherCurve(0.15);
   mainOutput.gain.value = 0.45;
-  sendBus.gain.value = 0.3;  // send 总量
+  sendBus.gain.value = 0.3;
 
-
-  return {
-    input, crusher, crusherWet, crusherFilter,
-    delay, delayFeedback, delayWet, convolver, reverbWet, sendBus,
-    mainOutput, analyser, capture, limiter
-  };
+  return { input, mainOutput, dcBlocker, limiter, analyser, capture, crusher, crusherFilter, crusherWet, delay, delayFeedback, delayWet, convolver, reverbWet, sendBus };
 }
 
 function updatePitchDisplay(d) {
   if (!els.noteDisplay || !els.freqDisplay) return;
-  if (d.active && d.note) {
-    els.noteDisplay.textContent = d.note;
-    els.freqDisplay.textContent = d.freq + ' Hz';
-    els.noteDisplay.style.opacity = '1';
-  } else {
-    els.noteDisplay.style.opacity = '0.3';
-    els.noteDisplay.textContent = '--';
-    els.freqDisplay.textContent = '-- Hz';
-  }
+  if (d.active && d.note) { els.noteDisplay.textContent = d.note; els.freqDisplay.textContent = d.freq + ' Hz'; els.noteDisplay.style.opacity = '1'; }
+  else { els.noteDisplay.style.opacity = '0.3'; els.noteDisplay.textContent = '--'; els.freqDisplay.textContent = '-- Hz'; }
 }
 
 function getEffectSettings() {
@@ -594,10 +436,10 @@ function getEffectSettings() {
     crushOn: els.crushOn.checked, crush: Number(els.crush.value) / 100, tone: 7200,
     spaceOn: els.spaceOn.checked, delay: Number(els.space.value) / 100, reverb: Number(els.space.value) / 100,
     lowLatency: els.lowLatency.checked, monitor: Number(els.monitor.value) / 100,
-    autoTuneMix: els.autoTuneMix ? Number(els.autoTuneMix.value) / 100 : 1,
+    autoTuneMix: els.autoTuneMix ? Number(els.autoTuneMix.value) / 100 : 0.65,
     warm: els.warm ? Number(els.warm.value) / 100 : 0.6,
     mode: document.querySelector('.voice-mode-btn.active')?.dataset?.mode || 'autoTune',
-    strength: els.strength ? Number(els.strength.value) / 100 : 0.85,
+    strength: els.strength ? Number(els.strength.value) / 100 : 0.7,
     formant: els.formant ? Number(els.formant.value) / 100 : 0.5,
     distortion: els.distortionRange ? Number(els.distortionRange.value) / 100 : 0,
     bitcrush: els.bitcrushRange ? Number(els.bitcrushRange.value) / 100 : 0,
@@ -611,27 +453,26 @@ function makeImpulse(ctx, seconds) {
   return buf;
 }
 function makeCrusherCurve(amount) {
-  const n = 4096, c = new Float32Array(n), steps = Math.max(5, Math.round(80 - amount * 72));
-  for (let i = 0; i < n; i++) { const x = (i * 2) / n - 1; c[i] = Math.round(x * steps) / steps; }
+  const steps = Math.max(5, Math.round(80 - amount * 72));
+  const c = new Float32Array(4096);
+  for (let i = 0; i < 4096; i++) { const x = (i * 2) / 4096 - 1; c[i] = Math.round(x * steps) / steps; }
   return c;
 }
 
-// ─── 更新效果参数 ───
 function updateEffectValues() {
-  const pitch = Number(els.pitchMix.value) / 100;
-  const synth = Number(els.synthMix.value) / 100;
   const crush = Number(els.crush.value) / 100;
   const space = Number(els.space?.value ?? 16) / 100;
   const monitor = Number(els.monitor.value) / 100;
   const low = els.lowLatency.checked;
-  const atMix = els.autoTuneMix ? Number(els.autoTuneMix.value) / 100 : 1;
+  const atMix = els.autoTuneMix ? Math.min(1, Math.max(0, els.autoTuneMix.value / 100)) : 0.65;
   const warmth = els.warm ? Number(els.warm.value) / 100 : 0.6;
-  const strength = els.strength ? Number(els.strength.value) / 100 : 0.85;
+  const strength = els.strength ? Number(els.strength.value) / 100 : 0.7;
+  const formantVal = els.formant ? Number(els.formant.value) / 100 : 0.5;
   const distortion = els.distortionRange ? Number(els.distortionRange.value) / 100 : 0;
   const bitcrush = els.bitcrushRange ? Number(els.bitcrushRange.value) / 100 : 0;
   const mode = document.querySelector('.voice-mode-btn.active')?.dataset?.mode || 'autoTune';
 
-  // 显示�?  if (outs.monitor) outs.monitor.textContent = els.monitor.value + '%';
+  if (outs.monitor) outs.monitor.textContent = els.monitor.value + '%';
   if (outs.pitchMix) outs.pitchMix.textContent = els.pitchMix.value + '%';
   if (outs.synthMix) outs.synthMix.textContent = els.synthMix.value + '%';
   if (outs.carrier) outs.carrier.textContent = els.carrier.value + ' Hz';
@@ -640,68 +481,40 @@ function updateEffectValues() {
   if (outs.autoTuneMix) outs.autoTuneMix.textContent = Math.round(atMix * 100) + '%';
   if (outs.warm) outs.warm.textContent = Math.round(warmth * 100) + '%';
   if (outs.strength) outs.strength.textContent = Math.round(strength * 100) + '%';
-  if (outs.formant) outs.formant.textContent = Math.round(Number(els.formant?.value ?? 50)) + '%';
+  if (outs.formant) outs.formant.textContent = Math.round(formantVal * 100) + '%';
   if (outs.distortion) outs.distortion.textContent = Math.round(distortion * 100) + '%';
   if (outs.bitcrush) outs.bitcrush.textContent = Math.round(bitcrush * 100) + '%';
 
-  // 发送到 AudioWorklet
   if (autoTuneNode) {
     autoTuneNode.port.postMessage({
-      mode: mode,
-      mix: els.pitchOn.checked ? atMix : 0,
-      scale: els.scale.value,
-      strength: strength,
-      formant: Number(els.formant?.value ?? 50) / 100,
-      distortion: distortion,
-      bitcrush: bitcrush,
-      warmth: els.warm ? warmth : 0.6,
-      tuneMix: atMix,
+      mode, mix: els.pitchOn.checked ? atMix : 0, scale: els.scale.value,
+      strength, formant: formantVal, distortion, bitcrush,
+      warmth: els.warm ? warmth : 0.6, tuneMix: atMix,
     });
   }
-
   if (!chain || !audio) return;
   const now = audio.currentTime;
 
-  // 主音量（直接控制，不用乘�?1.05�?  chain.mainOutput.gain.setTargetAtTime(monitor * 0.7, now, 0.02);
-
-  // Crusher（颗粒质感）
+  chain.mainOutput.gain.setTargetAtTime(monitor * 0.7, now, 0.02);
   if (els.crushOn.checked) {
     chain.crusher.curve = makeCrusherCurve(crush);
     chain.crusherWet.gain.setTargetAtTime(crush * 0.2, now, 0.02);
-    chain.crusherFilter.frequency.setTargetAtTime(7200 - crush * 3000, now, 0.02);
-  } else {
-    chain.crusherWet.gain.setTargetAtTime(0, now, 0.02);
-  }
+  } else { chain.crusherWet.gain.setTargetAtTime(0, now, 0.02); }
 
-  // Delay（延迟）
   if (els.spaceOn.checked) {
     chain.delay.delayTime.setTargetAtTime(0.12 + space * 0.38, now, 0.02);
     chain.delayFeedback.gain.setTargetAtTime(space * 0.4 * (low ? 0.5 : 1), now, 0.02);
     chain.delayWet.gain.setTargetAtTime(space * 0.3 * (low ? 0.5 : 1), now, 0.02);
+    chain.reverbWet.gain.setTargetAtTime(space * 0.35 * (low ? 0.5 : 1), now, 0.02);
   } else {
     chain.delayFeedback.gain.setTargetAtTime(0, now, 0.02);
     chain.delayWet.gain.setTargetAtTime(0, now, 0.02);
-  }
-
-  // Reverb（混响）
-  if (els.spaceOn.checked) {
-    chain.reverbWet.gain.setTargetAtTime(space * 0.35 * (low ? 0.5 : 1), now, 0.02);
-  } else {
     chain.reverbWet.gain.setTargetAtTime(0, now, 0.02);
   }
-
-  // Send 总线音量
   chain.sendBus.gain.setTargetAtTime(0.3 * (low ? 0.5 : 1), now, 0.02);
 }
 
-function quantizedDelayTime() {
-  const s = scales[els.scale.value] || scales.chromatic;
-  const a = Number(els.pitchMix.value) / 100;
-  const n = s.includes(0) ? 0 : s[0] / 1200;
-  return 0.004 + a * (0.008 + n);
-}
-
-// ─── 离线渲染 ───
+// ─── 离线导出 ───
 function createRenderGraph(ctx, destination, settings, monitorOverride, preNode) {
   const input = ctx.createGain();
   const mainOut = ctx.createGain();
@@ -718,21 +531,14 @@ function createRenderGraph(ctx, destination, settings, monitorOverride, preNode)
   const reverbWet = ctx.createGain();
 
   dcBlocker.type = "highpass"; dcBlocker.frequency.value = 120;
-  limiter.threshold.value = -12; limiter.knee.value = 12; limiter.ratio.value = 20;
-  limiter.attack.value = 0.001; limiter.release.value = 0.05;
+  limiter.threshold.value = -12; limiter.knee.value = 12; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.05;
   crusherFilter.type = "lowpass"; crusherFilter.frequency.value = 7200;
   convolver.buffer = makeImpulse(ctx, 1.5);
-  crusher.curve = makeCrusherCurve(settings.crush || 0);
 
   const chainInput = preNode || input;
   if (preNode) input.connect(preNode);
+  chainInput.connect(mainOut); mainOut.connect(dcBlocker); dcBlocker.connect(limiter); limiter.connect(destination);
 
-  chainInput.connect(mainOut);
-  mainOut.connect(dcBlocker);
-  dcBlocker.connect(limiter);
-  limiter.connect(destination);
-
-  // Send effects
   chainInput.connect(sendBus);
   sendBus.connect(crusher); crusher.connect(crusherFilter); crusherFilter.connect(crusherWet); crusherWet.connect(destination);
   sendBus.connect(delay); delay.connect(delayFeedback); delayFeedback.connect(delay); delay.connect(delayWet); delayWet.connect(destination);
@@ -740,80 +546,15 @@ function createRenderGraph(ctx, destination, settings, monitorOverride, preNode)
 
   mainOut.gain.value = (monitorOverride || 0.7) * 0.7;
   sendBus.gain.value = 0.3;
+  crusher.curve = makeCrusherCurve(settings.crush || 0);
   crusherWet.gain.value = settings.crushOn && settings.crush ? settings.crush * 0.15 : 0;
   delay.delayTime.value = 0.12 + (settings.delay || 0.16) * 0.38;
   delayFeedback.gain.value = settings.spaceOn ? (settings.delay || 0.16) * 0.35 : 0;
   delayWet.gain.value = settings.spaceOn ? (settings.delay || 0.16) * 0.25 : 0;
   reverbWet.gain.value = settings.spaceOn ? (settings.reverb || 0.16) * 0.3 : 0;
-
   return input;
 }
 
-// ─── 实时传声 ───
-async function startLive() {
-  try {
-    // 防止快速点击重复创�?    if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
-    if (liveSource) { try { liveSource.disconnect(); } catch {} liveSource = null; }
-
-    await ensureAudio(); stopFile();
-    if (!navigator.mediaDevices?.getUserMedia) throw new Error("浏览器无麦克风接�?);
-    liveStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    showActiveInput(liveStream);
-    liveSource = audio.createMediaStreamSource(liveStream);
-    liveSource.connect(chain.input);
-    // 授权后重新检测，显示设备名称
-    setTimeout(() => detectMicrophones(), 500);
-    setStatus("实时传声已开启。说话或唱歌时会输出电音效果�?);
-    // 更新状态栏绿点
-    const dot = document.querySelector('.bottom-status .dot');
-    if (dot) dot.style.background = '#48efc1';
-  } catch (err) { stopLive(); detectMicrophones(); setStatus("无法开启麦克风�? + err.message); }
-}
-function stopLive() {
-  if (!liveSource && !liveStream && !wavRecording) { setStatus("实时传声已停止�?); return; }
-  if (wavRecording) stopRecording();
-  if (liveSource) { liveSource.disconnect(); liveSource = null; }
-  if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
-  const dot = document.querySelector('.bottom-status .dot');
-  if (dot) dot.style.background = '#7d7f69';
-  setStatus("实时传声已停止�?);
-}
-
-// ─── 文件 ───
-async function loadFile(file) { await ensureAudio(); stopLive(); const bytes = await file.arrayBuffer(); fileBuffer = await audio.decodeAudioData(bytes); if (els.fileName) els.fileName.textContent = file.name; setStatus("已加载：" + file.name); }
-async function playFile() {
-  if (!fileBuffer) { setStatus("请先选择音频文件�?); els.fileInput?.click(); return; }
-  await ensureAudio(); stopFile();
-  fileSource = audio.createBufferSource(); fileSource.buffer = fileBuffer; fileSource.connect(chain.input);
-  fileSource.onended = () => { fileSource = null; }; fileSource.start();
-  setStatus("正在播放电音版�?);
-}
-function stopFile() { if (fileSource) { try { fileSource.stop(); } catch {} fileSource.disconnect(); fileSource = null; } }
-
-// ─── 录制 ───
-function startRecording(label) {
-  if (!chain || !liveSource) { setStatus("请先开启实时传声再录制�?); return false; }
-  wavRecording = true; wavLeft = []; wavRight = []; wavLength = 0; captureSampleRate = audio.sampleRate; hideDownload();
-  setStatus(label + "录制�?.."); return true;
-}
-function stopRecording() {
-  if (!wavRecording) { setStatus("当前没有录制�?); return; }
-  wavRecording = false;
-  if (!wavLength) { setStatus("未录到声音�?); return; }
-  const blob = encodeWavBlob(wavLeft, wavRight, wavLength, captureSampleRate);
-  makeDownload(blob, "实时传声"); setStatus("WAV 文件已生成，可下载�?);
-}
-async function startLiveRecord() { applyPreset("hardTune"); if (!liveSource) await startLive(); if (liveSource && !wavRecording) startRecording("边唱边录"); }
-async function exportProcessedFile() {
-  if (!fileBuffer) { setStatus("请先选择音频文件�?); els.fileInput?.click(); return; }
-  hideDownload(); setStatus("正在离线生成电音 WAV...");
-  try {
-    const r = await renderProcessedBuffer(fileBuffer);
-    const left = [r.getChannelData(0)]; const right = [r.numberOfChannels > 1 ? r.getChannelData(1) : r.getChannelData(0)];
-    const blob = encodeWavBlob(left, right, r.length, r.sampleRate);
-    makeDownload(blob, "上传音频电音�?); setStatus("电音 WAV 已生成�?);
-  } catch (err) { setStatus("导出失败: " + err.message); }
-}
 async function renderProcessedBuffer(buffer) {
   const OC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
   if (!OC) throw new Error("浏览器不支持离线导出");
@@ -821,8 +562,7 @@ async function renderProcessedBuffer(buffer) {
   const off = new OC(2, len, buffer.sampleRate);
   const src = off.createBufferSource(); src.buffer = buffer;
   const settings = getEffectSettings();
-
-  // 在离线上下文注册 AudioWorklet，使 5 种语音模式生�?  let offlineWorklet = null;
+  let offlineWorklet = null;
   try {
     const blob = new Blob([WORKLET_CODE], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
@@ -835,31 +575,65 @@ async function renderProcessedBuffer(buffer) {
       distortion: settings.distortion, bitcrush: settings.bitcrush,
       warmth: settings.warm, tuneMix: settings.autoTuneMix,
     });
-  } catch (e) {
-    console.warn('离线渲染无法加载 AudioWorklet，回退到基础效果:', e.message);
-  }
-
+  } catch {}
   const inp = createRenderGraph(off, off.destination, settings, 0.95, offlineWorklet);
   src.connect(inp); src.start(0); return off.startRendering();
 }
+
+// ─── 实时传声 ───
+async function startLive() {
+  try {
+    if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+    if (liveSource) { try { liveSource.disconnect(); } catch {} liveSource = null; }
+    await ensureAudio();
+    stopFile();
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error("浏览器无麦克风接口");
+    liveStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    showActiveInput(liveStream);
+    liveSource = audio.createMediaStreamSource(liveStream);
+    liveSource.connect(chain.input);
+    setStatus("实时传声已开启。说话或唱歌时会输出电音效果。");
+    const dot = document.querySelector('.bottom-status .dot');
+    if (dot) dot.style.background = '#48efc1';
+    setTimeout(() => detectMicrophones(), 500);
+  } catch (err) { stopLive(); detectMicrophones(); setStatus("无法开启麦克风：" + err.message); }
+}
+function stopLive() {
+  if (!liveSource && !liveStream && !wavRecording) { setStatus("实时传声已停止。"); return; }
+  if (wavRecording) stopRecording();
+  if (liveSource) { liveSource.disconnect(); liveSource = null; }
+  if (liveStream) { liveStream.getTracks().forEach(t => t.stop()); liveStream = null; }
+  const dot = document.querySelector('.bottom-status .dot');
+  if (dot) dot.style.background = '#7d7f69';
+  setStatus("实时传声已停止。");
+}
+
+// ─── 文件 ───
+async function loadFile(file) { await ensureAudio(); stopLive(); const bytes = await file.arrayBuffer(); fileBuffer = await audio.decodeAudioData(bytes); if (els.fileName) els.fileName.textContent = file.name; setStatus("已加载：" + file.name); }
+async function playFile() { if (!fileBuffer) { setStatus("请先选择音频文件。"); els.fileInput?.click(); return; } await ensureAudio(); stopFile(); fileSource = audio.createBufferSource(); fileSource.buffer = fileBuffer; fileSource.connect(chain.input); fileSource.onended = () => { fileSource = null; }; fileSource.start(); setStatus("正在播放电音版。"); }
+function stopFile() { if (fileSource) { try { fileSource.stop(); } catch {} fileSource.disconnect(); fileSource = null; } }
+
+// ─── 录制 ───
+function startRecording(label) { if (!chain || !liveSource) { setStatus("请先开启实时传声再录制。"); return false; } wavRecording = true; wavLeft = []; wavRight = []; wavLength = 0; captureSampleRate = audio.sampleRate; hideDownload(); setStatus(label + "录制中..."); return true; }
+function stopRecording() { if (!wavRecording) { setStatus("当前没有录制。"); return; } wavRecording = false; if (!wavLength) { setStatus("未录到声音。"); return; } const blob = encodeWavBlob(wavLeft, wavRight, wavLength, captureSampleRate); makeDownload(blob, "实时传声"); setStatus("WAV 文件已生成，可下载。"); }
+async function startLiveRecord() { applyPreset("hardTune"); if (!liveSource) await startLive(); if (liveSource && !wavRecording) startRecording("边唱边录"); }
+async function exportProcessedFile() { if (!fileBuffer) { setStatus("请先选择音频文件。"); els.fileInput?.click(); return; } hideDownload(); setStatus("正在离线生成电音 WAV..."); try { const r = await renderProcessedBuffer(fileBuffer); const left = [r.getChannelData(0)]; const right = [r.numberOfChannels > 1 ? r.getChannelData(1) : r.getChannelData(0)]; const blob = encodeWavBlob(left, right, r.length, r.sampleRate); makeDownload(blob, "上传音频电音版"); setStatus("电音 WAV 已生成。"); } catch (err) { setStatus("导出失败: " + err.message); } }
 
 // ─── 下载 ───
 function makeDownload(blob, label) {
   if (lastDownloadUrl) URL.revokeObjectURL(lastDownloadUrl);
   lastDownloadBlob = blob; lastDownloadUrl = URL.createObjectURL(blob);
-  const fn = label + "-" + new Date().toISOString().replace(/[:.]/g, "-") + ".wav";
-  lastDownloadName = fn;
+  const fn = label + "_" + Date.now() + ".wav"; lastDownloadName = fn;
   if (els.downloadLink) { els.downloadLink.href = lastDownloadUrl; els.downloadLink.download = fn; els.downloadLink.hidden = false; els.downloadLink.textContent = "下载 WAV"; }
   if (els.outputName) els.outputName.textContent = fn;
   if (els.outputTray) { els.outputTray.hidden = false; els.outputTray.scrollIntoView({ behavior: "smooth", block: "center" }); }
 }
 function hideDownload() { if (els.downloadLink) els.downloadLink.hidden = true; if (els.outputTray) els.outputTray.hidden = true; }
 async function saveGeneratedFile() {
-  if (!lastDownloadBlob) { setStatus("还没有生成文件�?); return; }
+  if (!lastDownloadBlob) { setStatus("还没有生成文件。"); return; }
   if (window.showSaveFilePicker) {
-    try { const h = await window.showSaveFilePicker({ suggestedName: lastDownloadName, types: [{ description: "WAV", accept: { "audio/wav": [".wav"] } }] }); const w = await h.createWritable(); await w.write(lastDownloadBlob); await w.close(); setStatus("已保存�?); return; } catch (e) { if (e.name !== "AbortError") { setStatus("保存失败: " + e.message); return; } }
+    try { const h = await window.showSaveFilePicker({ suggestedName: lastDownloadName, types: [{ description: "WAV", accept: { "audio/wav": [".wav"] } }] }); const w = await h.createWritable(); await w.write(lastDownloadBlob); await w.close(); setStatus("已保存。"); return; } catch (e) { if (e.name !== "AbortError") { setStatus("保存失败: " + e.message); return; } }
   }
-  // 降级方案：通过 <a> 下载
   const a = document.createElement("a"); a.href = lastDownloadUrl; a.download = lastDownloadName; a.click();
 }
 
@@ -885,12 +659,14 @@ function encodeWavBlob(lchunks, rchunks, length, sr) {
   return new Blob([buf], { type: "audio/wav" });
 }
 
-// ─── 可视�?───
+// ─── 可视化 ───
 function drawScope() {
   const canvas = els.scope, ctx = canvas.getContext("2d");
+  if (!chain) return;
   const freqData = new Uint8Array(chain.analyser.frequencyBinCount);
   const timeData = new Uint8Array(chain.analyser.frequencyBinCount);
   function render() {
+    if (!chain || !chain.analyser) { drawId = requestAnimationFrame(render); return; }
     const w = canvas.width, h = canvas.height;
     if (useSpectrum) {
       chain.analyser.getByteFrequencyData(freqData);
@@ -913,7 +689,7 @@ function drawScope() {
       ctx.strokeStyle = "rgba(79,240,180,0.04)"; ctx.lineWidth = 1;
       for (let x = 0; x < w; x += 48) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
       for (let y = 0; y < h; y += 40) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
-      ctx.strokeStyle = "rgba(79,240,180,0.08)"; ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
       ctx.lineWidth = 3; ctx.strokeStyle = "#4ff0b4"; ctx.shadowColor = "#62d8ff"; ctx.shadowBlur = 16;
       ctx.beginPath(); const slice = w / timeData.length;
       for (let i = 0; i < timeData.length; i++) { const y = (timeData[i] / 255) * h; i === 0 ? ctx.moveTo(i * slice, y) : ctx.lineTo(i * slice, y); }
@@ -924,9 +700,13 @@ function drawScope() {
   if (drawId) cancelAnimationFrame(drawId); render();
 }
 
-// ─── 预设系统 ───
-const PRESET_STORAGE_KEY = 'electro-voice-user-presets';
+function toggleSpectrumView() {
+  useSpectrum = !useSpectrum;
+  if (els.spectrumToggle) { els.spectrumToggle.textContent = useSpectrum ? '〰 波形' : '〰 频谱'; els.spectrumToggle.title = useSpectrum ? '切换回波形视图' : '切换到频谱视图'; }
+  setStatus(useSpectrum ? "频谱视图" : "波形视图");
+}
 
+// ─── 预设 ───
 function applyPreset(name) {
   const presets = {
     experimental: { pitchOn: true, pitchMix: 100, scale: "minor", synthOn: true, synthMix: 100, carrier: 72, crushOn: true, crush: 18, space: 42, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 65, warm: 70, mode: 'ethereal', strength: 90, distortion: 25, bitcrush: 8 },
@@ -934,98 +714,53 @@ function applyPreset(name) {
     rapHook:     { pitchOn: true, pitchMix: 88, scale: "minor", synthOn: true, synthMix: 58, carrier: 112, crushOn: true, crush: 6, space: 18, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 80, warm: 60, mode: 'autoTune', strength: 85, distortion: 3, bitcrush: 2 },
     instrumentModern: { pitchOn: false, pitchMix: 24, scale: "chromatic", synthOn: true, synthMix: 82, carrier: 64, crushOn: true, crush: 22, space: 34, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 40, warm: 40, mode: 'alien', strength: 50, distortion: 15, bitcrush: 10 },
     hardTune:    { pitchOn: true, pitchMix: 96, scale: "minor", synthOn: true, synthMix: 94, carrier: 88, crushOn: true, crush: 6, space: 16, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 65, warm: 50, mode: 'hardcore', strength: 95, distortion: 15, bitcrush: 5 },
-    hyperpop:    { pitchOn: true, pitchMix: 95, synthOn: true, synthMix: 54, carrier: 128, crushOn: true, crush: 34, space: 42, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 95, warm: 30, mode: 'autoTune', strength: 95, distortion: 30, bitcrush: 15, scale: "chromatic" },
-    robot:       { pitchOn: true, pitchMix: 62, synthOn: true, synthMix: 88, carrier: 82, crushOn: true, crush: 46, space: 20, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 70, warm: 20, mode: 'robot', strength: 60, distortion: 5, bitcrush: 40, scale: "minor" },
-    dream:       { pitchOn: true, pitchMix: 70, synthOn: true, synthMix: 32, carrier: 110, crushOn: true, crush: 16, space: 68, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 75, warm: 80, mode: 'ethereal', strength: 70, distortion: 0, bitcrush: 0, scale: "major" },
+    hyperpop:    { pitchOn: true, pitchMix: 95, synthOn: true, synthMix: 54, carrier: 128, crushOn: true, crush: 34, space: 42, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 65, warm: 30, mode: 'autoTune', strength: 95, distortion: 30, bitcrush: 15, scale: "chromatic" },
+    robot:       { pitchOn: true, pitchMix: 62, synthOn: true, synthMix: 88, carrier: 82, crushOn: true, crush: 46, space: 20, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 65, warm: 20, mode: 'robot', strength: 60, distortion: 5, bitcrush: 40, scale: "minor" },
+    dream:       { pitchOn: true, pitchMix: 70, synthOn: true, synthMix: 32, carrier: 110, crushOn: true, crush: 16, space: 68, spaceOn: true, lowLatency: false, monitor: 60, autoTuneMix: 65, warm: 80, mode: 'ethereal', strength: 70, distortion: 0, bitcrush: 0, scale: "major" },
     clean:       { pitchOn: true, pitchMix: 48, synthOn: true, synthMix: 20, carrier: 140, crushOn: true, crush: 8, space: 22, spaceOn: true, lowLatency: true, monitor: 60, autoTuneMix: 50, warm: 90, mode: 'autoTune', strength: 45, distortion: 0, bitcrush: 0, scale: "major" },
   };
-
   const p = presets[name];
   if (!p) { loadUserPreset(name); return; }
-
-  Object.entries(p).forEach(([k, v]) => {
-    if (!els[k]) return;
-    if (els[k].type === "checkbox") els[k].checked = Boolean(v);
-    else els[k].value = v;
-  });
-
-  // 同步模式按钮
+  Object.entries(p).forEach(([k, v]) => { if (!els[k]) return; if (els[k].type === "checkbox") els[k].checked = Boolean(v); else els[k].value = v; });
   if (p.mode && els.modeBtns) {
     els.modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === p.mode));
-    const info = MODE_INFO[p.mode];
-    if (info && els.modeInfo) els.modeInfo.textContent = info.desc;
-    if (info && els.modeLabel) els.modeLabel.textContent = info.label;
+    const info = MODE_INFO[p.mode]; if (info && els.modeInfo) els.modeInfo.textContent = info.desc; if (info && els.modeLabel) els.modeLabel.textContent = info.label;
   }
-
   updateEffectValues();
   document.querySelectorAll("[data-preset]").forEach(b => b.classList.toggle("active-preset", b.dataset.preset === name));
   setStatus("已切换：" + (presetLabels[name] || name));
 }
 
-const presetLabels = { experimental: "实验电子", popVocal: "流行人声", rapHook: "说唱 Hook", instrumentModern: "器乐现代�?, hardTune: "硬调电音", hyperpop: "Hyperpop", robot: "机器�?, dream: "梦幻电台", clean: "清爽" };
-
-// 用户预设
 function loadUserPresets() { try { return JSON.parse(localStorage.getItem(PRESET_STORAGE_KEY)) || {}; } catch { return {}; } }
 function saveUserPresets(presets) { localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(presets)); }
 function saveCurrentPreset() {
-  const name = prompt("保存当前设置为预设，输入名称�?); if (!name) return;
+  const name = prompt("保存当前设置为预设，输入名称："); if (!name) return;
   const data = {};
   ['pitchOn','pitchMix','scale','synthOn','synthMix','carrier','crushOn','crush','space','spaceOn','lowLatency','monitor','autoTuneMix','warm','mode','strength','formant','distortion','bitcrush'].forEach(k => {
     if (!els[k]) return;
     data[k] = els[k].type === "checkbox" ? els[k].checked : els[k].value;
   });
-  // 保存当前模式
-  const activeMode = document.querySelector('.voice-mode-btn.active')?.dataset?.mode || 'autoTune';
-  data.mode = activeMode;
+  data.mode = document.querySelector('.voice-mode-btn.active')?.dataset?.mode || 'autoTune';
   const all = loadUserPresets(); all[name] = data; saveUserPresets(all); updatePresetMenu();
   setStatus("预设已保存：" + name);
 }
-function deleteUserPreset() {
-  const all = loadUserPresets(); const names = Object.keys(all);
-  if (!names.length) { setStatus("没有用户预设可删除�?); return; }
-  const name = prompt("输入要删除的预设名称：\n" + names.join(", "));
-  if (!name || !all[name]) { setStatus("未找到该预设�?); return; }
-  delete all[name]; saveUserPresets(all); updatePresetMenu();
-  setStatus("已删除：" + name);
-}
-function loadUserPreset(name) {
-  const all = loadUserPresets(); const p = all[name];
-  if (!p) { setStatus("未找到预设：" + name); return; }
-  Object.entries(p).forEach(([k, v]) => {
-    if (!els[k]) return;
-    if (els[k].type === "checkbox") els[k].checked = Boolean(v); else els[k].value = v;
-  });
-  if (p.mode && els.modeBtns) {
-    els.modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === p.mode));
-    const info = MODE_INFO[p.mode]; if (info && els.modeInfo) els.modeInfo.textContent = info.desc; if (info && els.modeLabel) els.modeLabel.textContent = info.label;
-  }
-  updateEffectValues(); setStatus("已加载用户预设：" + name);
-}
+function deleteUserPreset() { const all = loadUserPresets(); const names = Object.keys(all); if (!names.length) { setStatus("没有用户预设可删除。"); return; } const name = prompt("输入要删除的预设名称：\n" + names.join(", ")); if (!name || !all[name]) { setStatus("未找到该预设。"); return; } delete all[name]; saveUserPresets(all); updatePresetMenu(); setStatus("已删除：" + name); }
+function loadUserPreset(name) { const all = loadUserPresets(); const p = all[name]; if (!p) { setStatus("未找到预设：" + name); return; } Object.entries(p).forEach(([k, v]) => { if (!els[k]) return; if (els[k].type === "checkbox") els[k].checked = Boolean(v); else els[k].value = v; }); if (p.mode && els.modeBtns) { els.modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === p.mode)); const info = MODE_INFO[p.mode]; if (info && els.modeInfo) els.modeInfo.textContent = info.desc; if (info && els.modeLabel) els.modeLabel.textContent = info.label; } updateEffectValues(); setStatus("已加载用户预设：" + name); }
 function updatePresetMenu() {
   if (!els.presetLoad) return;
   const all = loadUserPresets(); const names = Object.keys(all);
-  els.presetLoad.innerHTML = '<option value="">加载用户预设�?/option>';
+  els.presetLoad.innerHTML = '<option value="">加载用户预设...</option>';
   names.forEach(n => { const opt = document.createElement("option"); opt.value = n; opt.textContent = n; els.presetLoad.appendChild(opt); });
   els.presetLoad.style.display = names.length ? "inline-block" : "none";
 }
 
-// ─── 视图切换 ───
-function toggleSpectrumView() {
-  useSpectrum = !useSpectrum;
-  if (els.spectrumToggle) {
-    els.spectrumToggle.textContent = useSpectrum ? '�?波形' : '�?频谱';
-    els.spectrumToggle.title = useSpectrum ? '切换回波形视�? : '切换到频谱视�?;
-  }
-  setStatus(useSpectrum ? "频谱视图" : "波形视图");
-}
-
-// ─── 快捷�?───
+// ─── 快捷键 ───
 function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
     if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
     switch (e.key) {
       case " ": e.preventDefault(); if (liveSource) stopLive(); else startLive(); break;
-      case "r": case "R": e.preventDefault(); if (wavRecording) stopRecording(); else if (liveSource) startRecording("快捷键录�?); else { startLive(); setTimeout(() => startRecording("快捷键录�?), 300); } break;
+      case "r": case "R": e.preventDefault(); if (wavRecording) stopRecording(); else if (liveSource) startRecording("快捷键录制"); else { startLive(); setTimeout(() => startRecording("快捷键录制"), 300); } break;
       case "s": case "S": e.preventDefault(); stopLive(); break;
       case "1": applyPreset("experimental"); break; case "2": applyPreset("popVocal"); break; case "3": applyPreset("rapHook"); break;
       case "4": applyPreset("hyperpop"); break; case "5": applyPreset("robot"); break;
@@ -1036,7 +771,6 @@ function setupKeyboardShortcuts() {
 
 // ─── 事件绑定 ───
 function runAction(action) {
-  setStatus("处理�?..");
   switch (action) {
     case "liveRecord": startLiveRecord(); break; case "startLive": startLive(); break;
     case "startRecord": startRecording("实时传声"); break; case "stopRecord": stopRecording(); break;
@@ -1046,17 +780,16 @@ function runAction(action) {
   }
 }
 
-// 控件事件
+// 控件 slider 事件
 [els.pitchOn, els.lowLatency, els.monitor, els.pitchMix, els.scale, els.synthOn, els.synthMix, els.carrier, els.crushOn, els.crush, els.space, els.spaceOn, els.autoTuneMix, els.warm, els.strength, els.formant, els.distortionRange, els.bitcrushRange].filter(Boolean).forEach(c => c.addEventListener("input", updateEffectValues));
 
-// 模式按钮切换
+// 模式按钮
 if (els.modeBtns) {
   els.modeBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       els.modeBtns.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      const mode = btn.dataset.mode;
-      const info = MODE_INFO[mode];
+      const info = MODE_INFO[btn.dataset.mode];
       if (info) { if (els.modeInfo) els.modeInfo.textContent = info.desc; if (els.modeLabel) els.modeLabel.textContent = info.label; }
       updateEffectValues();
     });
@@ -1072,10 +805,11 @@ document.addEventListener("click", (e) => {
   const action = btn.dataset.action, preset = btn.dataset.preset;
   if (!action && !preset) return;
   e.preventDefault();
-  preset ? applyPreset(preset) : runAction(action);
+  setStatus("处理中...");
+  if (preset) { applyPreset(preset); }
+  else { runAction(action); }
 });
 
-// 预设保存/加载
 els.presetSave?.addEventListener("click", saveCurrentPreset);
 els.presetDelete?.addEventListener("click", deleteUserPreset);
 els.presetLoad?.addEventListener("change", (e) => { if (e.target.value) loadUserPreset(e.target.value); });
@@ -1085,20 +819,18 @@ els.spectrumToggle?.addEventListener("click", toggleSpectrumView);
 updateEffectValues();
 updatePresetMenu();
 setupKeyboardShortcuts();
-// 页面加载后主动请求麦克风权限（触发浏览器弹窗），方便后续检测设备名
-setTimeout(() => {
-  if (!navigator.mediaDevices?.getUserMedia) return;
-  navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } })
-    .then(s => { s.getTracks().forEach(t => t.stop()); })
-    .catch(() => {})
-    .finally(() => detectMicrophones());
+
+// 页面加载后请求麦克风权限
+setTimeout(async () => {
+  if (navigator.mediaDevices?.getUserMedia) {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+      s.getTracks().forEach(t => t.stop());
+    } catch {}
+  }
+  detectMicrophones();
 }, 1000);
+
 if (navigator.mediaDevices?.addEventListener) {
   navigator.mediaDevices.addEventListener("devicechange", () => detectMicrophones());
 }
-
-
-
-
-
-
