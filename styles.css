@@ -408,7 +408,7 @@ button.active-preset, .mode-grid button:hover, .panel-head button:hover, .preset
   text-align: right;
 }
 
-input[type="range"] { width: 100%; accent-color: var(--cyan); }
+input[type="range"] { width: 100%; accent-color: var(--cyan); touch-action: none; }
 
 /* ─── Toggles ─── */
 .toggles {

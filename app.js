@@ -101,6 +101,8 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
     this.lastPitchMidi = -1;
     this.stablePitchFrames = 0;
     this.feedbackSuppress = 0;
+    this.silenceCounter = 0;
+    this.lastWarningTime = 0;
 
     this.port.onmessage = (e) => {
       const d = e.data;
@@ -136,15 +138,24 @@ class ElectroVoiceWorklet extends AudioWorkletProcessor {
       if (valid.length >= 2) { const s = [...valid].sort((a,b)=>a-b); detectedFreq = s[Math.floor(s.length/2)]; }
       else if (valid.length === 1) detectedFreq = valid[0];
       else detectedFreq = -1;
+      if (typeof detectedFreq !== 'number' || !isFinite(detectedFreq)) detectedFreq = -1;
 
       if (detectedFreq > 0) {
+        if (this.silenceCounter > 10) this.silenceCounter = 10;
+        this.silenceCounter = Math.max(0, this.silenceCounter - 1);
         if (this.mode === 'autoTune' || this.mode === 'ethereal') {
           const q = quantizePitch(detectedFreq, this.intervals, this.rootNote);
-          if (q > 0) detectedFreq = detectedFreq + (q - detectedFreq) * this.strength;
+          if (q > 0 && isFinite(q)) detectedFreq = detectedFreq + (q - detectedFreq) * this.strength;
         } else if (this.mode === 'robot' || this.mode === 'hardcore') {
           const s = snapToEqualTemperament(detectedFreq);
           if (s > 0) detectedFreq = s;
         }
+      } else {
+        this.silenceCounter++;
+      }
+      if (this.silenceCounter > 300 && this.lastWarningTime < this.silenceCounter - 120) {
+        this.lastWarningTime = this.silenceCounter;
+        this.port.postMessage({ type: 'warning', msg: '未检测到有效音频信号' });
       }
       if (detectedFreq > 0) {
         if (this.smoothedFreq < 0) this.smoothedFreq = detectedFreq;
@@ -320,6 +331,7 @@ let audio, chain, liveStream, liveSource, fileBuffer, fileSource, drawId, lfo;
 let wavRecording = false, wavLeft = [], wavRight = [], wavLength = 0, captureSampleRate = 44100;
 let lastDownloadUrl = "", lastDownloadBlob = null, lastDownloadName = "electro-voice.wav";
 let autoTuneNode = null, useSpectrum = false;
+let recordingCapable = true; // false if ScriptProcessorNode unavailable
 
 // ─── 工具函数 ───
 function setStatus(text) { if (els.status) els.status.textContent = text; if (els.inlineStatus) els.inlineStatus.textContent = text; }
@@ -369,7 +381,7 @@ async function ensureAudio() {
   audio = new AC({ latencyHint: "interactive", sampleRate: 48000 });
   await loadWorklet(audio);
   autoTuneNode = new AudioWorkletNode(audio, 'electro-voice-worklet');
-  autoTuneNode.port.onmessage = (e) => { const d = e.data; if (d.type === 'pitch') updatePitchDisplay(d); };
+  autoTuneNode.port.onmessage = (e) => { const d = e.data; if (d.type === 'pitch') updatePitchDisplay(d); else if (d.type === 'warning' && d.msg) setStatus('⚠️ ' + d.msg); };
   chain = createEffectChain(audio);
   updateEffectValues();
   drawScope();
@@ -383,8 +395,25 @@ function createEffectChain(ctx) {
   const limiter = ctx.createDynamicsCompressor();
   limiter.threshold.value = -12; limiter.knee.value = 12; limiter.ratio.value = 20; limiter.attack.value = 0.001; limiter.release.value = 0.05;
   const analyser = ctx.createAnalyser();
-  const capture = ctx.createScriptProcessor(4096, 2, 2);
-  const captureMute = ctx.createGain();
+  let capture, captureMute;
+  try {
+    capture = ctx.createScriptProcessor(4096, 2, 2);
+    captureMute = ctx.createGain();
+    capture.connect(captureMute);
+    captureMute.connect(ctx.destination);
+    captureMute.gain.value = 0;
+    capture.onaudioprocess = (event) => {
+      if (!wavRecording) return;
+      const l = event.inputBuffer.getChannelData(0);
+      const r = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : l;
+      wavLeft.push(new Float32Array(l)); wavRight.push(new Float32Array(r)); wavLength += l.length;
+    };
+    recordingCapable = true;
+  } catch (e) {
+    console.warn('ScriptProcessorNode 不可用，实时录音已禁用:', e.message);
+    recordingCapable = false;
+    setStatus('当前浏览器不支持实时录音导出，请使用文件上传或浏览器录屏。');
+  }
   const crusher = ctx.createWaveShaper();
   const crusherFilter = ctx.createBiquadFilter();
   const crusherWet = ctx.createGain();
@@ -401,13 +430,6 @@ function createEffectChain(ctx) {
   dcBlocker.connect(limiter);
   limiter.connect(analyser);
   analyser.connect(ctx.destination);
-  try { capture.connect(captureMute); captureMute.connect(ctx.destination); captureMute.gain.value = 0; } catch {}
-  capture.onaudioprocess = (event) => {
-    if (!wavRecording) return;
-    const l = event.inputBuffer.getChannelData(0);
-    const r = event.inputBuffer.numberOfChannels > 1 ? event.inputBuffer.getChannelData(1) : l;
-    wavLeft.push(new Float32Array(l)); wavRight.push(new Float32Array(r)); wavLength += l.length;
-  };
 
   autoTuneNode.connect(sendBus);
   sendBus.connect(crusher); crusher.connect(crusherFilter); crusherFilter.connect(crusherWet); crusherWet.connect(analyser);
@@ -575,7 +597,11 @@ async function renderProcessedBuffer(buffer) {
       distortion: settings.distortion, bitcrush: settings.bitcrush,
       warmth: settings.warm, tuneMix: settings.autoTuneMix,
     });
-  } catch {}
+  } catch {
+    console.warn('离线导出：AudioWorklet 未加载，使用基础效果');
+  }
+  const workletLoaded = !!offlineWorklet;
+  setStatus(workletLoaded ? '正在导出电音版（语音模式已加载）...' : '正在导出基础版（未加载语音模式，效果可能不同）...');
   const inp = createRenderGraph(off, off.destination, settings, 0.95, offlineWorklet);
   src.connect(inp); src.start(0); return off.startRendering();
 }
@@ -614,7 +640,7 @@ async function playFile() { if (!fileBuffer) { setStatus("请先选择音频文�
 function stopFile() { if (fileSource) { try { fileSource.stop(); } catch {} fileSource.disconnect(); fileSource = null; } }
 
 // ─── 录制 ───
-function startRecording(label) { if (!chain || !liveSource) { setStatus("请先开启实时传声再录制。"); return false; } wavRecording = true; wavLeft = []; wavRight = []; wavLength = 0; captureSampleRate = audio.sampleRate; hideDownload(); setStatus(label + "录制中..."); return true; }
+function startRecording(label) { if (!recordingCapable) { setStatus('当前浏览器不支持实时录音导出。请使用文件上传或浏览器录屏。'); return false; } if (!chain || !liveSource) { setStatus("请先开启实时传声再录制。"); return false; } wavRecording = true; wavLeft = []; wavRight = []; wavLength = 0; captureSampleRate = audio.sampleRate; hideDownload(); setStatus(label + "录制中..."); return true; }
 function stopRecording() { if (!wavRecording) { setStatus("当前没有录制。"); return; } wavRecording = false; if (!wavLength) { setStatus("未录到声音。"); return; } const blob = encodeWavBlob(wavLeft, wavRight, wavLength, captureSampleRate); makeDownload(blob, "实时传声"); setStatus("WAV 文件已生成，可下载。"); }
 async function startLiveRecord() { applyPreset("hardTune"); if (!liveSource) await startLive(); if (liveSource && !wavRecording) startRecording("边唱边录"); }
 async function exportProcessedFile() { if (!fileBuffer) { setStatus("请先选择音频文件。"); els.fileInput?.click(); return; } hideDownload(); setStatus("正在离线生成电音 WAV..."); try { const r = await renderProcessedBuffer(fileBuffer); const left = [r.getChannelData(0)]; const right = [r.numberOfChannels > 1 ? r.getChannelData(1) : r.getChannelData(0)]; const blob = encodeWavBlob(left, right, r.length, r.sampleRate); makeDownload(blob, "上传音频电音版"); setStatus("电音 WAV 已生成。"); } catch (err) { setStatus("导出失败: " + err.message); } }
@@ -820,17 +846,16 @@ updateEffectValues();
 updatePresetMenu();
 setupKeyboardShortcuts();
 
-// 页面加载后请求麦克风权限
-setTimeout(async () => {
-  if (navigator.mediaDevices?.getUserMedia) {
-    try {
-      const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-      s.getTracks().forEach(t => t.stop());
-    } catch {}
-  }
+// 检测 file:// 协议 — 麦克风不可用
+const isFileProtocol = location.protocol === 'file:';
+if (isFileProtocol) {
+  const warn = '⚠️ 本地 file:// 模式下无法稳定使用麦克风。请使用本地服务器或 GitHub Pages（HTTPS）打开。推荐: npx serve .';
+  setStatus(warn);
+  setMicInfo('⚠️ file:// 协议', '麦克风不可用，请用本地服务器');
+} else {
+  // 仅在 HTTP/HTTPS 下检测麦克风，不自动请求权限
   detectMicrophones();
-}, 1000);
-
-if (navigator.mediaDevices?.addEventListener) {
-  navigator.mediaDevices.addEventListener("devicechange", () => detectMicrophones());
+  if (navigator.mediaDevices?.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => detectMicrophones());
+  }
 }
